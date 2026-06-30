@@ -76,11 +76,11 @@
       {% for p in task.pages %}
       <div class="page-row" id="pageRow{{ p.page_index }}">
         <span class="page-label">Page {{ p.page_index + 1 }}</span>
-        <a href="/tasks/{{ task.id }}/pages/{{ p.page_index }}/raw" target="_blank" title="View original page">
-          <img src="/tasks/{{ task.id }}/pages/{{ p.page_index }}/raw"
-               style="max-height:60px;max-width:120px;border:1px solid #444;border-radius:4px;vertical-align:middle;"
-               alt="Page {{ p.page_index + 1 }}">
-        </a>
+        <img src="/tasks/{{ task.id }}/pages/{{ p.page_index }}/raw"
+             style="max-height:60px;max-width:120px;border:1px solid #444;border-radius:4px;vertical-align:middle;cursor:pointer;"
+             alt="Page {{ p.page_index + 1 }}"
+             onclick="openEditor({{ p.page_index }})"
+             title="Click to view in right panel">
         <span class="status status-{{ p.status }}" id="pageStatus{{ p.page_index }}">{{ p.status }}</span>
         <span style="font-size:0.75em;color:#666;" id="pageOcr{{ p.page_index }}">{{ p.ocr_task_id or '' }}</span>
         {% if p.status == 'done' %}
