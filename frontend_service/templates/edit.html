@@ -4,6 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Edit Mapping — {{ task.id }}</title>
+
+<script>
+MathJax = {
+  tex: {
+    inlineMath: [['$', '$'], ['\\(', '\\)']],
+    displayMath: [['$$', '$$'], ['\\[', '\\]']],
+    processEscapes: false,
+  },
+  options: {
+    ignoreHtmlClass: 'no-mathjax',
+  },
+};
+</script>
+<script id="MathJax-script" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
+</script>
+
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; }
@@ -38,6 +55,13 @@
   .btn-auto { background: #444; color: #ddd; }
   .btn-reset { background: transparent; color: #f77; border: 1px solid #f77 !important; }
   .btn-download { background: #4fc3f7; color: #1a1a2e; }
+
+  /* Page tabs */
+  .page-tabs { display: flex; gap: 4px; margin-left: 12px; }
+  .page-tab { padding: 4px 14px; border: 1px solid #444; border-radius: 4px; background: transparent; color: #aaa; cursor: pointer; font-size: 0.8em; text-decoration: none; }
+  .page-tab.active { background: #4fc3f7; color: #1a1a2e; border-color: #4fc3f7; }
+  .page-tab:hover:not(.active) { border-color: #4fc3f7; color: #4fc3f7; }
+
   .status-msg { font-size: 0.8em; color: #4caf50; margin-left: auto; min-width: 60px; text-align: right; }
 </style>
 </head>
@@ -46,6 +70,7 @@
 <div class="nav">
   <a href="/tasks">← Tasks</a>
   <span class="task-id">{{ task.id }}</span>
+  <span class="page-tabs" id="page-tabs"></span>
   <a href="/tasks/{{ task.id }}/download" class="btn-download" style="margin-left:auto;">Download .md</a>
 </div>
 
@@ -62,14 +87,28 @@
 
 <script>
 const TASK_ID = '{{ task.id }}';
+const PAGE_INDEX = {{ page_index }};
+const PAGES_COUNT = {{ pages_count }};
 const FILENAMES = {{ filenames | tojson }};
 let currentMarkdown = '';
 let imgBlocks = {}; // filename → block element
 
 // --- Init ---
 
+function buildPageTabs() {
+  const container = document.getElementById('page-tabs');
+  for (let i = 0; i < PAGES_COUNT; i++) {
+    const a = document.createElement('a');
+    a.className = 'page-tab' + (i === PAGE_INDEX ? ' active' : '');
+    a.textContent = `Page ${i + 1}`;
+    a.href = `/tasks/${TASK_ID}/edit?page=${i}`;
+    container.appendChild(a);
+  }
+}
+
 async function init() {
-  const r = await fetch(`/tasks/${TASK_ID}/markdown`);
+  buildPageTabs();
+  const r = await fetch(`/tasks/${TASK_ID}/pages/${PAGE_INDEX}/markdown`);
   const d = await r.json();
   currentMarkdown = d.markdown;
   renderPreview(d.markdown);
@@ -88,9 +127,9 @@ function renderPreview(md) {
   html = html.replace(/]\(images\//g, `](/tasks/${TASK_ID}/images/`);
 
   // Inject hidden anchor markers at each question number line.
-  // "13. text" → "<span class=q-marker data-q=13></span>13. text"
-  html = html.replace(/(^|\n)(\d{1,2})\.\s/g,
-    '$1<span class="q-marker" data-q="$2"></span>$2. ');
+  // Matches "13.", "14、", "15,", "16．" at start of line.
+  html = html.replace(/(^|\n)(\d{1,2})([.、,．])(\s?)/g,
+    '$1<span class="q-marker" data-q="$2"></span>$2$3$4');
 
   // Parse into DOM, marking extracted images
   const temp = document.createElement('div');
@@ -137,6 +176,11 @@ function renderPreview(md) {
   // Pre-fill from existing labels, then position all images
   loadExistingLabels();
   repositionAllImages();
+
+  // Render LaTeX with MathJax
+  if (window.MathJax && MathJax.typesetPromise) {
+    MathJax.typesetPromise([document.getElementById('preview')]).catch(console.error);
+  }
 }
 
 // --- Reposition: move each image block after its assigned question ---
@@ -282,7 +326,7 @@ let saveTimer = null;
 async function doSave() {
   const mapping = buildMapping();
   try {
-    const r = await fetch(`/tasks/${TASK_ID}/mapping`, {
+    const r = await fetch(`/tasks/${TASK_ID}/pages/${PAGE_INDEX}/mapping`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(mapping),

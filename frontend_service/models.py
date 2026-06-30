@@ -26,9 +26,15 @@ CREATE TABLE IF NOT EXISTS pages (
     page_index INTEGER NOT NULL,
     ocr_task_id TEXT,
     status TEXT NOT NULL DEFAULT 'awaiting_upload',
-    markdown TEXT
+    markdown TEXT,
+    label_mapping TEXT
 );
 """
+
+MIGRATIONS = [
+    # Add label_mapping column to existing pages tables
+    "ALTER TABLE pages ADD COLUMN label_mapping TEXT",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +52,12 @@ async def get_db() -> aiosqlite.Connection:
         _db = await aiosqlite.connect(str(db_path))
         _db.row_factory = aiosqlite.Row
         await _db.executescript(SCHEMA)
+        # Run migrations (ignore errors for columns that already exist)
+        for stmt in MIGRATIONS:
+            try:
+                await _db.execute(stmt)
+            except aiosqlite.OperationalError:
+                pass
         await _db.commit()
     return _db
 
@@ -178,6 +190,41 @@ async def get_pending_pages(task_id: str) -> list[dict]:
     db = await get_db()
     rows = await db.execute_fetchall(
         "SELECT * FROM pages WHERE task_id = ? AND status IN ('pending', 'processing')",
+        (task_id,),
+    )
+    return [dict(r) for r in rows]
+
+
+# --- Per-page mapping ---
+
+async def get_page(task_id: str, page_index: int) -> dict | None:
+    """Get a single page by task_id and page_index."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT * FROM pages WHERE task_id = ? AND page_index = ?",
+        (task_id, page_index),
+    )
+    if not rows:
+        return None
+    return dict(rows[0])
+
+
+async def save_page_mapping(task_id: str, page_index: int, mapping_json: str):
+    """Persist the label mapping JSON for a single page."""
+    db = await get_db()
+    await db.execute(
+        "UPDATE pages SET label_mapping = ? WHERE task_id = ? AND page_index = ?",
+        (mapping_json, task_id, page_index),
+    )
+    await db.commit()
+
+
+async def get_all_page_markdowns(task_id: str) -> list[dict]:
+    """Get all completed pages with their markdown and label_mapping."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT page_index, markdown, label_mapping FROM pages "
+        "WHERE task_id = ? AND status = 'done' ORDER BY page_index",
         (task_id,),
     )
     return [dict(r) for r in rows]

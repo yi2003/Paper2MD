@@ -29,6 +29,7 @@ from task_manager import (
     _apply_labels_mapping,
     _extract_image_filenames,
     poll_loop,
+    remarge_task,
 )
 
 load_dotenv()
@@ -226,17 +227,26 @@ async def task_status_page(task_id: str):
 
 
 @app.get("/tasks/{task_id}/edit", response_class=HTMLResponse)
-async def edit_page(task_id: str):
-    """Mapping editor — images shown under their questions with inline Q# inputs."""
+async def edit_page(task_id: str, page: int = 0):
+    """Mapping editor — per-page, images shown under their questions."""
     task = await models.get_task(task_id)
     if task is None:
         raise HTTPException(404, "Task not found")
     if task["status"] != "done":
         raise HTTPException(400, "Task not yet completed")
 
-    md = task["merged_markdown"] or ""
+    pages_count = len(task["pages"])
+    if page < 0 or page >= pages_count:
+        raise HTTPException(404, f"Page {page} not found (task has {pages_count} pages)")
+
+    page_data = task["pages"][page]
+    if page_data["status"] != "done":
+        raise HTTPException(400, f"Page {page} is not yet completed (status: {page_data['status']})")
+
+    md = page_data.get("markdown") or ""
     filenames = _extract_image_filenames(md)
-    return render("edit.html", task=task, filenames=filenames)
+    return render("edit.html", task=task, filenames=filenames,
+                  page_index=page, pages_count=pages_count)
 
 
 # ---------------------------------------------------------------------------
@@ -272,21 +282,43 @@ async def get_markdown(task_id: str):
     return {"markdown": task.get("merged_markdown") or ""}
 
 
-@app.put("/tasks/{task_id}/mapping")
-async def save_mapping(task_id: str, request: Request):
-    """Apply a {filename: "QN"} mapping to the merged markdown.
+# ---------------------------------------------------------------------------
+# Per-page markdown & mapping
+# ---------------------------------------------------------------------------
+
+@app.get("/tasks/{task_id}/pages/{page_index}/markdown")
+async def get_page_markdown(task_id: str, page_index: int):
+    """Return the markdown for a single page (for the per-page editor)."""
+    page = await models.get_page(task_id, page_index)
+    if page is None or page["status"] != "done":
+        raise HTTPException(404, "Page not found or not done")
+    return {"markdown": page.get("markdown") or ""}
+
+
+@app.put("/tasks/{task_id}/pages/{page_index}/mapping")
+async def save_page_mapping(task_id: str, page_index: int, request: Request):
+    """Save per-page {filename: "QN"} mapping and re-merge.
 
     Body: JSON object mapping filename → question label.
     """
-    task = await models.get_task(task_id)
-    if task is None:
-        raise HTTPException(404, "Task not found")
+    page = await models.get_page(task_id, page_index)
+    if page is None or page["status"] != "done":
+        raise HTTPException(404, "Page not found or not done")
 
     mapping = await request.json()
-    md = task["merged_markdown"] or ""
-    updated = _apply_labels_mapping(md, mapping)
-    await models.update_task_markdown(task_id, updated)
-    return {"markdown": updated}
+    import json as _json
+    mapping_json = _json.dumps(mapping, ensure_ascii=False)
+
+    await models.save_page_mapping(task_id, page_index, mapping_json)
+
+    # Apply mapping to this page and return the labelled markdown
+    md = page.get("markdown") or ""
+    labelled = _apply_labels_mapping(md, mapping)
+
+    # Re-merge all pages with their mappings
+    await remarge_task(task_id)
+
+    return {"markdown": labelled}
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +332,10 @@ async def download(task_id: str):
     if task is None:
         raise HTTPException(404, "Task not found")
 
-    md = task.get("merged_markdown") or ""
+    # Re-merge to apply any per-page label mappings
+    merged = await remarge_task(task_id)
+    md = merged if merged else (task.get("merged_markdown") or "")
+
     md = _upload_images_to_imgur(task_id, md)
 
     return PlainTextResponse(

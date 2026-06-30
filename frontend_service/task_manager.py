@@ -107,7 +107,7 @@ def _apply_labels_mapping(md_content: str, mapping: dict[str, str]) -> str:
 
     # 3. Find question-header positions in the cleaned content.
     q_boundaries: list[tuple[int, str, int]] = []  # (start, num_str, end)
-    for m in re.finditer(r'^(\d{1,2})\.\s', md_content, re.MULTILINE):
+    for m in re.finditer(r'^(\d{1,2})[.、,．]\s?', md_content, re.MULTILINE):
         q_boundaries.append((m.start(), m.group(1), 0))  # end filled below
 
     # 4. Group images by assigned question.
@@ -279,7 +279,8 @@ def _can_retry(page: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 def _merge_markdowns(pages: list[dict]) -> str:
-    """Concatenate page markdowns with page boundary markers."""
+    """Concatenate page markdowns with per-page label mappings applied."""
+    import json as _json
     parts: list[str] = []
     for i, page in enumerate(pages):
         md = page.get("markdown") or ""
@@ -287,8 +288,34 @@ def _merge_markdowns(pages: list[dict]) -> str:
         if page["status"] == "failed":
             parts.append(f"<!-- page {n} FAILED -->\n\n")
         else:
+            # Apply per-page label mapping if one exists
+            raw = page.get("label_mapping")
+            if raw:
+                try:
+                    mapping = _json.loads(raw)
+                    md = _apply_labels_mapping(md, mapping)
+                except _json.JSONDecodeError:
+                    pass
             parts.append(f"<!-- page {n} -->\n\n{md}\n\n<!-- /page {n} -->\n\n")
     return "".join(parts)
+
+
+async def remarge_task(task_id: str) -> str | None:
+    """Re-merge all done pages with their per-page label mappings.
+
+    Returns the merged markdown string, or None if the task doesn't exist.
+    """
+    task = await models.get_task(task_id)
+    if task is None:
+        return None
+
+    pages = task["pages"]
+    if not all(p["status"] == "done" for p in pages):
+        return None
+
+    merged = _merge_markdowns(pages)
+    await models.update_task_status(task_id, "done", merged)
+    return merged
 
 
 # ---------------------------------------------------------------------------
