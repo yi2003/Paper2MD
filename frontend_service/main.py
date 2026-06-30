@@ -91,6 +91,16 @@ async def serve_image(task_id: str, filename: str):
     return FileResponse(str(filepath))
 
 
+@app.get("/tasks/{task_id}/pages/{page_index}/raw")
+async def serve_raw_page(task_id: str, page_index: int):
+    """Serve the original uploaded page image."""
+    filepath = UPLOADS_DIR / task_id / f"page_{page_index}.jpg"
+    if not filepath.exists():
+        raise HTTPException(404, "Raw page image not found")
+    from fastapi.responses import FileResponse
+    return FileResponse(str(filepath))
+
+
 # ---------------------------------------------------------------------------
 # Page endpoints
 # ---------------------------------------------------------------------------
@@ -322,62 +332,19 @@ async def save_page_mapping(task_id: str, page_index: int, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Download
-# ---------------------------------------------------------------------------
-
-@app.get("/tasks/{task_id}/download")
-async def download(task_id: str):
-    """Download self-contained Markdown with images uploaded to Imgur."""
-    task = await models.get_task(task_id)
-    if task is None:
-        raise HTTPException(404, "Task not found")
-
-    # Re-merge to apply any per-page label mappings
-    merged = await remarge_task(task_id)
-    md = merged if merged else (task.get("merged_markdown") or "")
-
-    md = _upload_images_to_imgur(task_id, md)
-
-    return PlainTextResponse(
-        md,
-        media_type="text/markdown",
-        headers={"Content-Disposition": f'attachment; filename="exam_{task_id}.md"'},
-    )
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _convert_png_to_jpeg(image_data: bytes, filename: str) -> bytes:
-    """Convert PNG to JPEG in-memory."""
-    from PIL import Image
-
-    img = Image.open(BytesIO(image_data))
-    if img.mode in ("RGBA", "P"):
-        img = img.convert("RGB")
-    buf = BytesIO()
-    img.save(buf, format="JPEG", quality=92)
-    buf.seek(0)
-    print(f"  Converted {filename} → JPEG", file=sys.stderr)
-    return buf.read()
-
-
-# ---------------------------------------------------------------------------
-# Imgur upload
+# Per-page download
 # ---------------------------------------------------------------------------
 
 _IMGUR_UPLOAD_URL = "https://api.imgur.com/3/image"
 _ANON_CLIENT_ID = "546c25a59c58ad7"
 
 
-def _upload_images_to_imgur(task_id: str, md_content: str) -> str:
-    """Upload all referenced images to Imgur, replace local refs with URLs.
+def _upload_images_for_markdown(md_content: str, images_dir: Path) -> str:
+    """Upload images referenced in markdown to Imgur, replace local refs.
 
-    Reads images from uploads/{task_id}/images/, uploads each to Imgur,
-    then replaces images/<filename> refs in the markdown with the Imgur URLs.
+    Reads images from `images_dir`, uploads each to Imgur, then replaces
+    images/<filename> refs with Imgur URLs.
     """
-    images_dir = UPLOADS_DIR / task_id / "images"
     if not images_dir.is_dir():
         return md_content
 
@@ -385,8 +352,7 @@ def _upload_images_to_imgur(task_id: str, md_content: str) -> str:
     if client_id in ("", "your_imgur_client_id_here", None):
         client_id = _ANON_CLIENT_ID
 
-    # Find images referenced in the markdown
-    refs = set()
+    refs: set[str] = set()
     for m in re.finditer(r"""src=["']images/([^"']+)["']""", md_content):
         refs.add(m.group(1))
     for m in re.finditer(r"""!\[.*?\]\(images/([^)]+)\)""", md_content):
@@ -395,7 +361,7 @@ def _upload_images_to_imgur(task_id: str, md_content: str) -> str:
     if not refs:
         return md_content
 
-    print(f"  [download:{task_id}] uploading {len(refs)} images to Imgur...",
+    print(f"  [download] uploading {len(refs)} images to Imgur...",
           file=sys.stderr)
 
     for filename in refs:
@@ -424,6 +390,81 @@ def _upload_images_to_imgur(task_id: str, md_content: str) -> str:
             print(f"    ✗ {filename} — {e}", file=sys.stderr)
 
     return md_content
+
+
+@app.get("/tasks/{task_id}/pages/{page_index}/download")
+async def download_page(task_id: str, page_index: int):
+    """Download a single page's Markdown with images uploaded to Imgur."""
+    page = await models.get_page(task_id, page_index)
+    if page is None or page["status"] != "done":
+        raise HTTPException(404, "Page not found or not done")
+
+    md = page.get("markdown") or ""
+
+    # Apply per-page label mapping if one exists
+    import json as _json
+    raw = page.get("label_mapping")
+    if raw:
+        try:
+            mapping = _json.loads(raw)
+            from task_manager import _apply_labels_mapping
+            md = _apply_labels_mapping(md, mapping)
+        except _json.JSONDecodeError:
+            pass
+
+    images_dir = UPLOADS_DIR / task_id / "images"
+    md = _upload_images_for_markdown(md, images_dir)
+
+    return PlainTextResponse(
+        md,
+        media_type="text/markdown",
+        headers={"Content-Disposition":
+                 f'attachment; filename="exam_{task_id}_page{page_index + 1}.md"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Download (full task)
+# ---------------------------------------------------------------------------
+
+@app.get("/tasks/{task_id}/download")
+async def download(task_id: str):
+    """Download self-contained Markdown with images uploaded to Imgur."""
+    task = await models.get_task(task_id)
+    if task is None:
+        raise HTTPException(404, "Task not found")
+
+    # Re-merge to apply any per-page label mappings
+    merged = await remarge_task(task_id)
+    md = merged if merged else (task.get("merged_markdown") or "")
+
+    images_dir = UPLOADS_DIR / task_id / "images"
+    md = _upload_images_for_markdown(md, images_dir)
+
+    return PlainTextResponse(
+        md,
+        media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="exam_{task_id}.md"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _convert_png_to_jpeg(image_data: bytes, filename: str) -> bytes:
+    """Convert PNG to JPEG in-memory."""
+    from PIL import Image
+
+    img = Image.open(BytesIO(image_data))
+    if img.mode in ("RGBA", "P"):
+        img = img.convert("RGB")
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    buf.seek(0)
+    print(f"  Converted {filename} → JPEG", file=sys.stderr)
+    return buf.read()
+
 
 import asyncio
 

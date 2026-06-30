@@ -5,6 +5,7 @@ Port of parse_exam.py steps 0–4: downsample → PaddleOCR-VL inference →
 extract markdown + images (as base64 for transport).
 """
 
+import os
 import base64
 import mimetypes
 import sys
@@ -13,10 +14,6 @@ from pathlib import Path
 
 import paddle
 
-# oneDNN is auto-detected by PaddlePaddle; FLAGS_use_mkldnn crashes
-# PaddleOCR-VL due to missing pir::ArrayAttribute support.
-# paddle.set_flags({'FLAGS_use_mkldnn': True})
-
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -24,24 +21,47 @@ import paddle
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 
 # ---------------------------------------------------------------------------
-# Model singleton (lazy, thread-safe)
+# Pipeline pool — N independent PaddleOCR-VL instances, shared via semaphore.
+# Each worker thread acquires a pipeline, uses it, then releases it back.
+# This avoids thread-safety issues with a single instance while allowing
+# N concurrent OCR operations.
 # ---------------------------------------------------------------------------
 
-_pipeline = None
-_pipeline_lock = threading.Lock()
+_POOL_SIZE = int(os.getenv("OCR_WORKERS", "2"))
 
 
-def get_pipeline():
-    """Lazy-load the PaddleOCR-VL pipeline (thread-safe, singleton)."""
-    global _pipeline
-    if _pipeline is None:
-        with _pipeline_lock:
-            if _pipeline is None:
-                from paddleocr import PaddleOCRVL
-                print("Loading PaddleOCR-VL v1.6 model...", file=sys.stderr)
-                _pipeline = PaddleOCRVL(pipeline_version="v1.6")
-                print("Model loaded.", file=sys.stderr)
-    return _pipeline
+class PipelinePool:
+    """Pool of N PaddleOCR-VL pipeline instances, guarded by a semaphore."""
+
+    def __init__(self, size: int):
+        self._sem = threading.Semaphore(size)
+        self._pipelines: list = []
+        self._lock = threading.Lock()
+
+    def acquire(self):
+        """Block until a pipeline is available, then return it.
+
+        Pipelines are lazily created up to `size` instances and reused.
+        """
+        self._sem.acquire()
+        with self._lock:
+            if self._pipelines:
+                return self._pipelines.pop()
+        # No cached instance — create a new one (we hold a semaphore slot)
+        from paddleocr import PaddleOCRVL
+        print("Loading PaddleOCR-VL v1.6 model (enable_mkldnn=True)...", file=sys.stderr)
+        pipeline = PaddleOCRVL(pipeline_version="v1.6", enable_mkldnn=True)
+        print("Model loaded.", file=sys.stderr)
+        return pipeline
+
+    def release(self, pipeline):
+        """Return a pipeline to the pool for reuse."""
+        with self._lock:
+            self._pipelines.append(pipeline)
+        self._sem.release()
+
+
+_pool = PipelinePool(_POOL_SIZE)
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +125,8 @@ def run_ocr(image_path: Path, work_dir: Path, max_dim: int = 1536):
         resized_name = resized.name
 
     # ---- Step 1: PaddleOCR-VL inference ----
-    pipeline = get_pipeline()
-    with _pipeline_lock:
+    pipeline = _pool.acquire()
+    try:
         output = pipeline.predict(
             str(input_for_ocr),
             use_layout_detection=True,
@@ -117,6 +137,8 @@ def run_ocr(image_path: Path, work_dir: Path, max_dim: int = 1536):
         )
         for res in output:
             res.save_to_markdown(save_path=str(work_dir))
+    finally:
+        _pool.release(pipeline)
 
     # ---- Step 2: Find the generated Markdown ----
     md_files = sorted(

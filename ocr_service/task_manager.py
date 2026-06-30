@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """In-memory FIFO task queue for the OCR service.
 
-- Single background worker thread (serial processing — matches pipeline lock).
+- Thread-pool worker (N concurrent OCR operations, matches pipeline pool size).
 - Tasks expire 5 min after reaching 'done' or 'failed' (TTL).
 - Pending/processing tasks do NOT expire — they stay queued until processed.
 """
 
+import os
 import queue
 import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from pipeline import run_ocr
 
 RESULT_TTL_SEC = 300       # 5 minutes — how long done/failed results live
 CLEANUP_INTERVAL_SEC = 30  # how often the cleanup thread runs
+DEFAULT_WORKERS = int(os.getenv("OCR_WORKERS", "2"))
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -43,14 +46,16 @@ class Task:
 # ---------------------------------------------------------------------------
 
 class TaskManager:
-    """Thread-safe in-memory task store + FIFO worker."""
+    """Thread-safe in-memory task store + FIFO dispatch + thread-pool workers."""
 
-    def __init__(self, work_dir: Path):
+    def __init__(self, work_dir: Path, worker_count: int = DEFAULT_WORKERS):
         self._tasks: dict[str, Task] = {}
         self._lock = threading.Lock()
         self._queue: queue.Queue[str] = queue.Queue()
         self._work_dir = work_dir
-        self._worker_thread: threading.Thread | None = None
+        self._worker_count = worker_count
+        self._executor: ThreadPoolExecutor | None = None
+        self._dispatch_thread: threading.Thread | None = None
         self._cleanup_thread: threading.Thread | None = None
         self._running = False
 
@@ -104,12 +109,16 @@ class TaskManager:
     # --- lifecycle ---
 
     def start(self):
-        """Start the worker and cleanup background threads."""
+        """Start the thread pool, dispatch thread, and cleanup thread."""
         self._running = True
-        self._worker_thread = threading.Thread(
-            target=self._worker_loop, daemon=True, name="ocr-worker"
+        self._executor = ThreadPoolExecutor(
+            max_workers=self._worker_count, thread_name_prefix="ocr-worker"
         )
-        self._worker_thread.start()
+
+        self._dispatch_thread = threading.Thread(
+            target=self._dispatch_loop, daemon=True, name="ocr-dispatcher"
+        )
+        self._dispatch_thread.start()
 
         self._cleanup_thread = threading.Thread(
             target=self._cleanup_loop, daemon=True, name="ocr-cleanup"
@@ -117,13 +126,17 @@ class TaskManager:
         self._cleanup_thread.start()
 
     def stop(self):
-        """Signal threads to stop (they are daemons — will die with process)."""
+        """Signal threads to stop, then shut down the executor."""
         self._running = False
+        if self._executor is not None:
+            self._executor.shutdown(wait=False)
 
     # --- internals ---
 
-    def _worker_loop(self):
-        """Single-threaded FIFO worker. Blocks on queue, processes one at a time."""
+    def _dispatch_loop(self):
+        """Single dispatch thread: dequeues task IDs and submits them to the
+        thread-pool executor.  Blocks on queue, submits as fast as workers free up.
+        """
         while self._running:
             try:
                 task_id = self._queue.get(timeout=1)
@@ -135,30 +148,40 @@ class TaskManager:
             if task is None:
                 continue
 
-            # Mark processing
             with self._lock:
                 task.status = "processing"
             print(f"  [task:{task_id}] processing → {task.image_path.name}",
                   file=sys.stderr)
 
-            try:
-                result = run_ocr(
-                    image_path=task.image_path,
-                    work_dir=self._work_dir / task_id / "_ocr_work",
-                    max_dim=1536,
-                )
-                with self._lock:
-                    task.result = result
-                    task.status = "done"
-                    task.completed_at = time.time()
-                print(f"  [task:{task_id}] done ({len(result['markdown']):,} chars)",
-                      file=sys.stderr)
-            except Exception as exc:
-                with self._lock:
-                    task.status = "failed"
-                    task.error = str(exc)
-                    task.completed_at = time.time()
-                print(f"  [task:{task_id}] failed: {exc}", file=sys.stderr)
+            # Submit to thread pool — workers acquire/release a pipeline
+            # from the pool, so up to `_worker_count` run concurrently.
+            self._executor.submit(self._process_task, task_id)
+
+    def _process_task(self, task_id: str):
+        """Run OCR on a single task (called from executor thread)."""
+        with self._lock:
+            task = self._tasks.get(task_id)
+        if task is None:
+            return
+
+        try:
+            result = run_ocr(
+                image_path=task.image_path,
+                work_dir=self._work_dir / task_id / "_ocr_work",
+                max_dim=1536,
+            )
+            with self._lock:
+                task.result = result
+                task.status = "done"
+                task.completed_at = time.time()
+            print(f"  [task:{task_id}] done ({len(result['markdown']):,} chars)",
+                  file=sys.stderr)
+        except Exception as exc:
+            with self._lock:
+                task.status = "failed"
+                task.error = str(exc)
+                task.completed_at = time.time()
+            print(f"  [task:{task_id}] failed: {exc}", file=sys.stderr)
 
     def _cleanup_loop(self):
         """Periodically remove tasks whose results have expired."""

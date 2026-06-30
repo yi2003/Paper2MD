@@ -75,6 +75,14 @@ MathJax = {
 </div>
 
 <div class="main">
+  <details style="margin-bottom:16px;background:#16213e;border:1px solid #333;border-radius:8px;padding:12px;">
+    <summary style="cursor:pointer;color:#4fc3f7;font-size:0.9em;user-select:none;">📷 Original Page {{ page_index + 1 }} (click to expand)</summary>
+    <a href="/tasks/{{ task.id }}/pages/{{ page_index }}/raw" target="_blank">
+      <img src="/tasks/{{ task.id }}/pages/{{ page_index }}/raw"
+           style="max-width:100%;max-height:600px;border:1px solid #444;border-radius:4px;margin-top:8px;display:block;"
+           alt="Original page {{ page_index + 1 }}">
+    </a>
+  </details>
   <div class="markdown-body" id="preview"></div>
 </div>
 

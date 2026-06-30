@@ -6,13 +6,17 @@
 <title>Task {{ task.id }}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; max-width: 700px; margin: 40px auto; padding: 20px; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; overflow-x: hidden; }
+  .layout { display: flex; min-height: 100vh; align-items: flex-start; }
+  .main-col { flex: 1 1 auto; max-width: 700px; margin: 40px auto; padding: 20px; transition: all 0.3s; }
+  .layout.has-panel .main-col { margin-left: 20px; margin-right: 0; max-width: none; flex: 0 0 auto; width: calc(100vw - 60vw - 40px); }
+
   h1 { text-align: center; margin-bottom: 24px; font-size: 1.3em; }
   .nav { text-align: center; margin-bottom: 20px; }
   .nav a { color: #4fc3f7; }
   .card { background: #16213e; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
   .overall { font-size: 1.1em; margin-bottom: 16px; }
-  .page-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #2a2a4e; }
+  .page-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #2a2a4e; flex-wrap: wrap; }
   .page-row:last-child { border-bottom: none; }
   .page-label { min-width: 60px; font-weight: 600; }
   .status { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; font-weight: 600; }
@@ -21,58 +25,330 @@
   .status-done { background: #1a3c1a; color: #4caf50; }
   .status-failed { background: #3c1a1a; color: #f77; }
   .status-awaiting_upload { background: #444; color: #888; }
-  .btn { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; }
-  .btn-edit { background: #4fc3f7; color: #1a1a2e; text-decoration: none; display: inline-block; }
-  .btn-download { background: #4caf50; color: #1a1a2e; text-decoration: none; display: inline-block; margin-left: 8px; }
+  .btn { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; text-decoration: none; display: inline-block; }
+  .btn-edit { background: #4fc3f7; color: #1a1a2e; font-size: 0.75em; padding: 4px 12px; }
+  .btn-edit:hover { background: #29b6f6; }
+  .btn-download { background: #4caf50; color: #1a1a2e; font-size: 0.75em; padding: 4px 12px; }
+  .btn-download:hover { background: #43a047; }
   .btn-retry { background: #f90; color: #1a1a2e; margin-left: 8px; font-size: 0.8em; }
+  .btn-save { background: #4caf50; color: #fff; }
+  .btn-auto { background: #555; color: #ddd; }
+  .btn-reset { background: transparent; color: #f77; border: 1px solid #f77 !important; }
   .hidden { display: none; }
+
+  /* Right panel — inline flex child, pushes main content */
+  .edit-panel { width: 0; min-width: 0; overflow: hidden; background: #111; border-left: none; transition: width 0.3s, min-width 0.3s, padding 0.3s; display: flex; flex-direction: column; flex: 0 0 auto; }
+  .edit-panel.open { width: 60vw; min-width: 500px; overflow-y: auto; border-left: 1px solid #333; padding: 24px; }
+  .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .panel-header h2 { font-size: 1.1em; }
+  .panel-close { background: none; border: 1px solid #555; color: #aaa; font-size: 1.2em; cursor: pointer; width: 32px; height: 32px; border-radius: 4px; line-height: 30px; text-align: center; }
+  .panel-close:hover { color: #fff; border-color: #f77; }
+
+  .panel-section { margin-bottom: 16px; }
+  .panel-section h3 { font-size: 0.85em; color: #888; margin-bottom: 8px; }
+  .panel-raw-img { max-width: 100%; max-height: 320px; border: 1px solid #444; border-radius: 4px; display: block; cursor: pointer; }
+
+  .fig-item { display: flex; align-items: center; gap: 12px; padding: 10px; background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 6px; margin-bottom: 8px; }
+  .fig-item img { max-height: 100px; max-width: 140px; border: 1px solid #444; border-radius: 3px; }
+  .fig-item .fig-name { flex: 1; font-size: 0.75em; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .fig-item input { width: 80px; padding: 6px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; text-align: center; font-size: 1em; }
+  .fig-item input:focus { outline: none; border-color: #4fc3f7; }
+  .fig-item input.has-value { border-color: #4caf50; }
+
+  .panel-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .panel-toolbar button, .panel-toolbar a { padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8em; font-weight: 600; text-decoration: none; }
+  .panel-status { font-size: 0.8em; color: #4caf50; margin-left: auto; align-self: center; }
 </style>
 </head>
 <body>
+<div class="layout" id="layout">
+<div class="main-col" id="mainCol">
+  <div class="nav"><a href="/tasks">← Task list</a></div>
+  <h1>Task <code>{{ task.id }}</code></h1>
 
-<div class="nav"><a href="/tasks">← Task list</a></div>
-<h1>Task <code>{{ task.id }}</code></h1>
-
-<div class="card">
-  <div class="overall">
-    Status: <span class="status status-{{ task.status }}" id="overallStatus">{{ task.status }}</span>
-    <span style="margin-left:16px;color:#888;" id="progressText"></span>
-  </div>
-
-  <div id="pages">
-    {% for p in task.pages %}
-    <div class="page-row" id="pageRow{{ p.page_index }}">
-      <span class="page-label">Page {{ p.page_index + 1 }}</span>
-      <span class="status status-{{ p.status }}" id="pageStatus{{ p.page_index }}">{{ p.status }}</span>
-      <span style="font-size:0.75em;color:#666;" id="pageOcr{{ p.page_index }}">{{ p.ocr_task_id or '' }}</span>
-      <button class="btn btn-retry hidden" id="retryBtn{{ p.page_index }}" onclick="retryPage({{ p.page_index }})">Retry</button>
+  <div class="card">
+    <div class="overall">
+      Status: <span class="status status-{{ task.status }}" id="overallStatus">{{ task.status }}</span>
+      <span style="margin-left:16px;color:#888;" id="progressText"></span>
     </div>
-    {% endfor %}
-  </div>
 
-  <div style="margin-top:16px;text-align:center;" id="actions" class="hidden">
-    <a class="btn btn-edit" id="editLink" href="/tasks/{{ task.id }}/edit">Edit Mapping</a>
-    <a class="btn btn-download" id="downloadLink" href="/tasks/{{ task.id }}/download">Download .md</a>
+    <div id="pages">
+      {% for p in task.pages %}
+      <div class="page-row" id="pageRow{{ p.page_index }}">
+        <span class="page-label">Page {{ p.page_index + 1 }}</span>
+        <a href="/tasks/{{ task.id }}/pages/{{ p.page_index }}/raw" target="_blank" title="View original page">
+          <img src="/tasks/{{ task.id }}/pages/{{ p.page_index }}/raw"
+               style="max-height:60px;max-width:120px;border:1px solid #444;border-radius:4px;vertical-align:middle;"
+               alt="Page {{ p.page_index + 1 }}">
+        </a>
+        <span class="status status-{{ p.status }}" id="pageStatus{{ p.page_index }}">{{ p.status }}</span>
+        <span style="font-size:0.75em;color:#666;" id="pageOcr{{ p.page_index }}">{{ p.ocr_task_id or '' }}</span>
+        {% if p.status == 'done' %}
+        <button class="btn btn-edit" onclick="openEditor({{ p.page_index }})">Edit</button>
+        <a class="btn btn-download" href="/tasks/{{ task.id }}/pages/{{ p.page_index }}/download">Download .md</a>
+        {% endif %}
+        <button class="btn btn-retry hidden" id="retryBtn{{ p.page_index }}" onclick="retryPage({{ p.page_index }})">Retry</button>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div style="margin-top:16px;text-align:center;" id="actions" class="hidden">
+      <a class="btn btn-download" id="downloadLink" href="/tasks/{{ task.id }}/download" style="font-size:0.9em;padding:8px 20px;">Download All .md</a>
+    </div>
   </div>
 </div>
 
+<!-- Right edit panel — flex child of .layout -->
+<div class="edit-panel" id="editPanel">
+  <div class="panel-header">
+    <h2>Edit Page <span id="panelPageNum">0</span></h2>
+    <button class="panel-close" onclick="closeEditor()">&times;</button>
+  </div>
+
+  <div class="panel-section">
+    <h3>Original Page</h3>
+    <a id="panelRawLink" href="#" target="_blank">
+      <img class="panel-raw-img" id="panelRawImg" src="" alt="Original page">
+    </a>
+  </div>
+
+  <div class="panel-section">
+    <h3>Figures (<span id="figCount">0</span>)</h3>
+    <div id="figList"></div>
+  </div>
+
+  <div class="panel-toolbar">
+    <button class="btn-auto" onclick="autoFill()">Auto-fill</button>
+    <button class="btn-reset" onclick="resetAll()">Clear</button>
+    <button class="btn-save" onclick="doSave()">Save</button>
+    <a class="btn btn-download" id="panelDownload" href="#" style="font-size:0.8em;padding:8px 14px;">Download .md</a>
+    <span class="panel-status" id="panelStatus"></span>
+  </div>
+</div>
+</div>
+
 <script>
-const taskId = '{{ task.id }}';
-const totalPages = {{ task.pages | length }};
+const TASK_ID = '{{ task.id }}';
+const TOTAL_PAGES = {{ task.pages | length }};
 let pollTimer = null;
+
+// Current editor state
+let editPageIndex = -1;
+let editFilenames = [];
+let editImgBlocks = {};  // fn → {img, input} elements
+
+// --- Panel open/close ---
+
+async function openEditor(pageIndex) {
+  editPageIndex = pageIndex;
+
+  // Fetch page markdown + extract filenames
+  const r = await fetch(`/tasks/${TASK_ID}/pages/${pageIndex}/markdown`);
+  const d = await r.json();
+  const md = d.markdown || '';
+  editFilenames = extractImageFilenames(md);
+
+  // Set raw image
+  const rawUrl = `/tasks/${TASK_ID}/pages/${pageIndex}/raw`;
+  document.getElementById('panelRawImg').src = rawUrl;
+  document.getElementById('panelRawLink').href = rawUrl;
+  document.getElementById('panelPageNum').textContent = pageIndex + 1;
+  document.getElementById('figCount').textContent = editFilenames.length;
+  document.getElementById('panelDownload').href = `/tasks/${TASK_ID}/pages/${pageIndex}/download`;
+
+  // Build figure list
+  renderFigureList();
+
+  // Open panel
+  document.getElementById('editPanel').classList.add('open');
+  document.getElementById('layout').classList.add('has-panel');
+
+  // Load existing labels
+  loadExistingLabels(pageIndex);
+}
+
+function closeEditor() {
+  document.getElementById('editPanel').classList.remove('open');
+  document.getElementById('layout').classList.remove('has-panel');
+  editPageIndex = -1;
+  editFilenames = [];
+  editImgBlocks = {};
+}
+
+function extractImageFilenames(md) {
+  const names = [];
+  const seen = new Set();
+  const re = /src=["'](?:[^"']*\/)?([^/"']+\.(?:jpg|jpeg|png|gif|webp|bmp))["']/gi;
+  let m;
+  while ((m = re.exec(md)) !== null) {
+    const name = m[1].toLowerCase();
+    if (!seen.has(name)) { names.push(m[1]); seen.add(name); }
+  }
+  // Also match markdown images
+  const mdRe = /!\[.*?\]\((?:[^)]*\/)?([^/)]+\.(?:jpg|jpeg|png|gif|webp|bmp))\)/gi;
+  while ((m = mdRe.exec(md)) !== null) {
+    const name = m[1].toLowerCase();
+    if (!seen.has(name)) { names.push(m[1]); seen.add(name); }
+  }
+  return names;
+}
+
+function renderFigureList() {
+  const container = document.getElementById('figList');
+  container.innerHTML = '';
+  editImgBlocks = {};
+
+  editFilenames.forEach(fn => {
+    const div = document.createElement('div');
+    div.className = 'fig-item';
+
+    const img = document.createElement('img');
+    img.src = `/tasks/${TASK_ID}/images/${fn}`;
+    img.alt = fn;
+    img.onerror = function() { this.style.display = 'none'; };
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'fig-name';
+    nameSpan.textContent = fn;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Q#';
+    input.dataset.filename = fn;
+    input.addEventListener('input', function() {
+      this.classList.toggle('has-value', !!this.value.trim());
+    });
+
+    div.appendChild(img);
+    div.appendChild(nameSpan);
+    div.appendChild(input);
+    container.appendChild(div);
+
+    editImgBlocks[fn] = { img, input };
+  });
+
+  // Pre-fill from existing labels
+  loadExistingLabels(editPageIndex);
+}
+
+// --- Existing labels ---
+
+async function loadExistingLabels(pageIndex) {
+  // Read current labels from the markdown's *[Q<N> 附图]* tags
+  try {
+    const r = await fetch(`/tasks/${TASK_ID}/pages/${pageIndex}/markdown`);
+    const d = await r.json();
+    const md = d.markdown || '';
+    const labelRe = /\*\[Q(\d+)\s*附图\]\*/g;
+    let m;
+    while ((m = labelRe.exec(md)) !== null) {
+      const qNum = m[1];
+      const afterPos = m.index + m[0].length;
+      const rest = md.substring(afterPos);
+      const imgRe = /src=["'](?:[^"']*\/)?([^/"']+\.(?:jpg|jpeg|png|gif|webp|bmp))["']/i;
+      const imgMatch = imgRe.exec(rest);
+      if (imgMatch) {
+        const fn = imgMatch[1].toLowerCase();
+        // Find matching block by case-insensitive filename
+        for (const key of Object.keys(editImgBlocks)) {
+          if (key.toLowerCase() === fn) {
+            const block = editImgBlocks[key];
+            if (block && block.input && !block.input.value) {
+              block.input.value = qNum;
+              block.input.classList.add('has-value');
+            }
+            break;
+          }
+        }
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+// --- Auto-fill by vertical position ---
+
+function parseCoords(filename) {
+  const m = filename.match(/img_in_image_box_(\d+)_(\d+)_(\d+)_(\d+)/);
+  return m ? { y1: +m[1], x1: +m[2], y2: +m[3], x2: +m[4] } : null;
+}
+
+function autoFill() {
+  let items = editFilenames.map(fn => {
+    const c = parseCoords(fn);
+    return { fn, y: c ? c.y1 : 9999 };
+  });
+  items.sort((a, b) => a.y - b.y);
+  const start = parseInt(prompt('Starting question number?', '1')) || 1;
+  items.forEach((item, idx) => {
+    const block = editImgBlocks[item.fn];
+    if (block && block.input) {
+      block.input.value = start + idx;
+      block.input.classList.add('has-value');
+    }
+  });
+}
+
+// --- Reset ---
+
+function resetAll() {
+  Object.values(editImgBlocks).forEach(block => {
+    if (block && block.input) {
+      block.input.value = '';
+      block.input.classList.remove('has-value');
+    }
+  });
+}
+
+// --- Build mapping & save ---
+
+function buildMapping() {
+  const mapping = {};
+  Object.keys(editImgBlocks).forEach(fn => {
+    const input = editImgBlocks[fn].input;
+    const val = input.value.trim();
+    if (val) mapping[fn] = val;
+  });
+  return mapping;
+}
+
+async function doSave() {
+  const mapping = buildMapping();
+  try {
+    const r = await fetch(`/tasks/${TASK_ID}/pages/${editPageIndex}/mapping`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(mapping),
+    });
+    if (r.ok) {
+      showStatus('✓ Saved');
+    } else {
+      const d = await r.json();
+      showStatus('✗ ' + (d.detail || 'error'));
+    }
+  } catch (e) {
+    showStatus('✗ ' + e.message);
+  }
+}
+
+function showStatus(msg) {
+  document.getElementById('panelStatus').textContent = msg;
+  setTimeout(() => { document.getElementById('panelStatus').textContent = ''; }, 2500);
+}
+
+// --- Progress polling ---
 
 function updateProgress() {
   let done = 0, failed = 0;
-  for (let i = 0; i < totalPages; i++) {
+  for (let i = 0; i < TOTAL_PAGES; i++) {
     const el = document.getElementById('pageStatus' + i);
     if (!el) continue;
     const st = el.textContent;
     if (st === 'done') done++;
     if (st === 'failed') failed++;
   }
-  document.getElementById('progressText').textContent = `(${done + failed}/${totalPages} done)`;
+  document.getElementById('progressText').textContent = `(${done + failed}/${TOTAL_PAGES} done)`;
 
-  if (done === totalPages) {
+  if (done === TOTAL_PAGES) {
     document.getElementById('overallStatus').textContent = 'done';
     document.getElementById('overallStatus').className = 'status status-done';
     document.getElementById('actions').classList.remove('hidden');
@@ -82,7 +358,7 @@ function updateProgress() {
 
 async function poll() {
   try {
-    const r = await fetch(`/tasks/${taskId}/status`);
+    const r = await fetch(`/tasks/${TASK_ID}/status`);
     const d = await r.json();
 
     document.getElementById('overallStatus').textContent = d.status;
@@ -101,6 +377,23 @@ async function poll() {
       if (retryEl) {
         retryEl.classList.toggle('hidden', p.status !== 'failed');
       }
+      // Show edit+download buttons when page becomes done
+      const row = document.getElementById('pageRow' + i);
+      if (row && p.status === 'done') {
+        if (!row.querySelector('.btn-edit')) {
+          const editBtn = document.createElement('button');
+          editBtn.className = 'btn btn-edit';
+          editBtn.textContent = 'Edit';
+          editBtn.onclick = function() { openEditor(i); };
+          const dlBtn = document.createElement('a');
+          dlBtn.className = 'btn btn-download';
+          dlBtn.textContent = 'Download .md';
+          dlBtn.href = `/tasks/${TASK_ID}/pages/${i}/download`;
+          const refNode = row.querySelector('.btn-retry') || row.lastElementChild;
+          row.insertBefore(dlBtn, refNode);
+          row.insertBefore(editBtn, dlBtn);
+        }
+      }
     }
 
     if (d.status === 'done') {
@@ -115,7 +408,7 @@ async function poll() {
 
 async function retryPage(index) {
   try {
-    const r = await fetch(`/tasks/${taskId}/pages/${index}/retry`, { method: 'POST' });
+    const r = await fetch(`/tasks/${TASK_ID}/pages/${index}/retry`, { method: 'POST' });
     if (r.ok) {
       document.getElementById('retryBtn' + index).classList.add('hidden');
       document.getElementById('pageStatus' + index).textContent = 'pending';
@@ -125,6 +418,11 @@ async function retryPage(index) {
     alert('Retry failed: ' + e.message);
   }
 }
+
+// Keyboard shortcut: Esc to close panel
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeEditor();
+});
 
 poll();
 pollTimer = setInterval(poll, 2000);

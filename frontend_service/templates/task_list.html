@@ -44,7 +44,6 @@
     <td>
       <a href="/tasks/{{ t.id }}">view</a>
       {% if t.status == 'done' %}
-      | <a href="/tasks/{{ t.id }}/edit">edit</a>
       | <a href="/tasks/{{ t.id }}/download">download</a>
       {% endif %}
     </td>
