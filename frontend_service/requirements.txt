@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+python-multipart
+jinja2
+aiosqlite
+requests
+Pillow
+python-dotenv

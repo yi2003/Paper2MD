@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Math Exam Parser — Upload</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; max-width: 700px; margin: 40px auto; padding: 20px; }
+  h1 { text-align: center; margin-bottom: 24px; font-size: 1.3em; }
+  .card { background: #16213e; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  label { display: block; margin-bottom: 6px; font-size: 0.9em; color: #aaa; }
+  input, button { font-size: 1em; }
+  input[type=number] { width: 80px; padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; text-align: center; }
+  button { padding: 10px 28px; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  .btn-primary { background: #4fc3f7; color: #1a1a2e; }
+  .btn-primary:hover { background: #29b6f6; }
+  .btn-secondary { background: #444; color: #ddd; margin-left: 8px; }
+  .btn-secondary:hover { background: #555; }
+  .file-inputs { margin-top: 12px; }
+  .file-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .file-row span { min-width: 60px; font-size: 0.9em; color: #888; }
+  .file-row input[type=file] { flex: 1; padding: 8px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; }
+  .file-row .status { min-width: 80px; font-size: 0.8em; }
+  .status-ok { color: #4caf50; }
+  .status-err { color: #f77; }
+  .nav { text-align: center; margin-bottom: 20px; }
+  .nav a { color: #4fc3f7; }
+</style>
+</head>
+<body>
+
+<div class="nav"><a href="/tasks">← Task list</a></div>
+<h1>New Exam Task</h1>
+
+<div class="card">
+  <label for="pages">Number of pages</label>
+  <input type="number" id="pages" value="1" min="1" max="50">
+  <button class="btn-primary" onclick="createTask()" style="margin-left:12px;">Create Task</button>
+  <span id="createStatus" style="margin-left:12px;font-size:0.85em;"></span>
+</div>
+
+<div class="card" id="uploadCard" style="display:none;">
+  <h3 style="margin-bottom:12px;">Upload pages (in order — first upload = page 1)</h3>
+  <div class="file-inputs" id="fileInputs"></div>
+  <div style="margin-top:12px;">
+    <button class="btn-primary" onclick="uploadAll()">Upload All Pages</button>
+    <span id="uploadStatus" style="margin-left:12px;font-size:0.85em;"></span>
+  </div>
+</div>
+
+<script>
+let taskId = null;
+
+async function createTask() {
+  const pages = +document.getElementById('pages').value;
+  const form = new FormData();
+  form.append('pages', pages);
+
+  const r = await fetch('/tasks', { method: 'POST', body: form });
+  const d = await r.json();
+  taskId = d.task_id;
+
+  document.getElementById('createStatus').textContent = `Task ${taskId} created`;
+  document.getElementById('createStatus').className = 'status-ok';
+
+  // Build file inputs
+  const container = document.getElementById('fileInputs');
+  container.innerHTML = '';
+  for (let i = 0; i < pages; i++) {
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    row.innerHTML = `
+      <span>Page ${i + 1}</span>
+      <input type="file" id="file_${i}" accept=".jpg,.jpeg,.png">
+      <span class="status" id="fileStatus_${i}"></span>
+    `;
+    container.appendChild(row);
+  }
+  document.getElementById('uploadCard').style.display = 'block';
+}
+
+async function uploadAll() {
+  const pages = +document.getElementById('pages').value;
+  document.getElementById('uploadStatus').textContent = 'Uploading...';
+
+  for (let i = 0; i < pages; i++) {
+    const input = document.getElementById(`file_${i}`);
+    const status = document.getElementById(`fileStatus_${i}`);
+    if (!input.files.length) {
+      status.textContent = 'no file';
+      status.className = 'status status-err';
+      continue;
+    }
+
+    const form = new FormData();
+    form.append('file', input.files[0]);
+
+    try {
+      const r = await fetch(`/tasks/${taskId}/pages?index=${i}`, { method: 'POST', body: form });
+      const d = await r.json();
+      if (r.ok) {
+        status.textContent = '✓ uploaded';
+        status.className = 'status status-ok';
+      } else {
+        status.textContent = d.detail || 'error';
+        status.className = 'status status-err';
+      }
+    } catch (e) {
+      status.textContent = e.message;
+      status.className = 'status status-err';
+    }
+  }
+
+  document.getElementById('uploadStatus').textContent = 'Done! ';
+  const link = document.createElement('a');
+  link.href = `/tasks/${taskId}`;
+  link.textContent = 'View task status →';
+  link.style.color = '#4fc3f7';
+  document.getElementById('uploadStatus').appendChild(link);
+}
+</script>
+</body>
+</html>

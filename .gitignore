@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.env
+*.db
+
+# OCR temp/output
+ocr_service/temp/
+service/_work/
+service/output_dir/
+*_out/
+
+# Frontend uploads & state
+frontend_service/uploads/
+frontend_service/data.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

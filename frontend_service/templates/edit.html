@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Edit Mapping — {{ task.id }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; }
+  .nav { position: fixed; top: 0; left: 0; right: 0; background: #111; padding: 8px 20px; z-index: 10; display: flex; align-items: center; gap: 16px; font-size: 0.85em; }
+  .nav a { color: #4fc3f7; }
+  .nav .task-id { color: #888; }
+  .main { max-width: 960px; margin: 0 auto; padding: 54px 24px 80px; }
+  .markdown-body { font-size: 0.95em; line-height: 1.7; color: #ccc; }
+  .markdown-body img { max-width: 100%; border: 1px solid #444; border-radius: 4px; }
+  .markdown-body table { margin: 12px auto; border-collapse: collapse; }
+  .markdown-body td, .markdown-body th { border: 1px solid #555; padding: 4px 10px; text-align: center; }
+  .markdown-body h2 { border-bottom: 1px solid #444; padding-bottom: 4px; margin: 1.5em 0 0.6em; }
+
+  /* Question marker — hidden anchor for positioning images */
+  .q-marker { display: none; }
+
+  /* Image wrapper injected by JS */
+  .img-block { margin: 16px 0; padding: 10px; background: #16213e; border: 1px solid #444; border-radius: 8px; text-align: center; }
+  .img-block .q-label { font-size: 0.85em; color: #4fc3f7; font-weight: 600; margin-bottom: 6px; }
+  .img-block .q-label:empty { display: none; }
+  .img-block img { display: block; margin: 0 auto; }
+  .img-block .img-meta { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 8px; }
+  .img-block .filename { font-size: 0.62em; color: #666; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .img-block input { width: 80px; padding: 5px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; text-align: center; font-size: 0.9em; }
+  .img-block input:focus { outline: none; border-color: #4fc3f7; }
+  .img-block input.has-value { border-color: #4caf50; }
+
+  /* Toolbar */
+  .toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: #111; border-top: 1px solid #333; padding: 10px 24px; display: flex; align-items: center; gap: 10px; z-index: 10; }
+  .toolbar button, .toolbar a.btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: 600; text-decoration: none; }
+  .btn-save { background: #4caf50; color: #fff; }
+  .btn-auto { background: #444; color: #ddd; }
+  .btn-reset { background: transparent; color: #f77; border: 1px solid #f77 !important; }
+  .btn-download { background: #4fc3f7; color: #1a1a2e; }
+  .status-msg { font-size: 0.8em; color: #4caf50; margin-left: auto; min-width: 60px; text-align: right; }
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <a href="/tasks">← Tasks</a>
+  <span class="task-id">{{ task.id }}</span>
+  <a href="/tasks/{{ task.id }}/download" class="btn-download" style="margin-left:auto;">Download .md</a>
+</div>
+
+<div class="main">
+  <div class="markdown-body" id="preview"></div>
+</div>
+
+<div class="toolbar">
+  <button class="btn-auto" onclick="autoFill()">Auto-fill</button>
+  <button class="btn-reset" onclick="resetAll()">Clear all</button>
+  <button class="btn-save" onclick="manualSave()">Save</button>
+  <span class="status-msg" id="status"></span>
+</div>
+
+<script>
+const TASK_ID = '{{ task.id }}';
+const FILENAMES = {{ filenames | tojson }};
+let currentMarkdown = '';
+let imgBlocks = {}; // filename → block element
+
+// --- Init ---
+
+async function init() {
+  const r = await fetch(`/tasks/${TASK_ID}/markdown`);
+  const d = await r.json();
+  currentMarkdown = d.markdown;
+  renderPreview(d.markdown);
+}
+
+// --- Preview — inject question markers, build image blocks, reposition ---
+
+function renderPreview(md) {
+  currentMarkdown = md;
+  const preview = document.getElementById('preview');
+
+  // Rewrite image src paths to local task image endpoint
+  let html = md;
+  html = html.replace(/src="images\//g, `src="/tasks/${TASK_ID}/images/`);
+  html = html.replace(/src='images\//g, `src='/tasks/${TASK_ID}/images/`);
+  html = html.replace(/]\(images\//g, `](/tasks/${TASK_ID}/images/`);
+
+  // Inject hidden anchor markers at each question number line.
+  // "13. text" → "<span class=q-marker data-q=13></span>13. text"
+  html = html.replace(/(^|\n)(\d{1,2})\.\s/g,
+    '$1<span class="q-marker" data-q="$2"></span>$2. ');
+
+  // Parse into DOM, marking extracted images
+  const temp = document.createElement('div');
+  temp.innerHTML = html;
+  temp.querySelectorAll('img').forEach(img => {
+    const src = img.getAttribute('src') || '';
+    const fn = src.split('/').pop();
+    if (FILENAMES.includes(fn)) img.setAttribute('data-fn', fn);
+  });
+  preview.innerHTML = temp.innerHTML;
+
+  // Build .img-block wrappers for each extracted image
+  imgBlocks = {};
+  preview.querySelectorAll('img[data-fn]').forEach(img => {
+    const fn = img.getAttribute('data-fn');
+
+    const block = document.createElement('div');
+    block.className = 'img-block';
+
+    const label = document.createElement('div');
+    label.className = 'q-label';
+    block.appendChild(label);
+
+    // Move image into block (detach from current parent)
+    block.appendChild(img);
+
+    const meta = document.createElement('div');
+    meta.className = 'img-meta';
+    meta.innerHTML = `<span class="filename">${fn}</span>`;
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Q#';
+    input.dataset.filename = fn;
+    input.addEventListener('input', onInputChange);
+    input.addEventListener('blur', onInputBlur);
+    meta.appendChild(input);
+    block.appendChild(meta);
+
+    // Store reference (detached — will be positioned by repositionImage)
+    imgBlocks[fn] = block;
+  });
+
+  // Pre-fill from existing labels, then position all images
+  loadExistingLabels();
+  repositionAllImages();
+}
+
+// --- Reposition: move each image block after its assigned question ---
+
+function repositionImage(fn, qNum) {
+  const block = imgBlocks[fn];
+  if (!block) return;
+
+  const preview = document.getElementById('preview');
+
+  if (!qNum) {
+    // No question assigned — append at the very end
+    preview.appendChild(block);
+    return;
+  }
+
+  // Collect all question markers in document order
+  const markers = [...preview.querySelectorAll('.q-marker')];
+  // Find the marker for *this* question
+  const idx = markers.findIndex(m => m.dataset.q === qNum);
+
+  if (idx === -1) {
+    // Question number not in the text — append at end
+    preview.appendChild(block);
+    return;
+  }
+
+  // Find the top-level node containing this marker
+  function topLevel(el) {
+    while (el.parentNode && el.parentNode !== preview) el = el.parentNode;
+    return el;
+  }
+
+  // Insert before the *next* question's top-level node, or at end
+  if (idx + 1 < markers.length) {
+    const nextAnchor = topLevel(markers[idx + 1]);
+    preview.insertBefore(block, nextAnchor);
+  } else {
+    preview.appendChild(block);
+  }
+}
+
+function repositionAllImages() {
+  // Group images by question, then reposition each
+  const preview = document.getElementById('preview');
+  Object.values(imgBlocks).forEach(b => {
+    if (!b.parentNode) preview.appendChild(b);
+  });
+
+  // Sort by question number, then filename (so same-Q images stay together)
+  const entries = [];
+  Object.keys(imgBlocks).forEach(fn => {
+    const input = imgBlocks[fn].querySelector('input');
+    const q = input.value.trim() || null;
+    entries.push({ fn, q });
+  });
+
+  // Sort: unassigned last, then by Q number, then by filename pos
+  entries.sort((a, b) => {
+    if (!a.q && !b.q) return 0;
+    if (!a.q) return 1;
+    if (!b.q) return -1;
+    const nA = parseInt(a.q) || 0;
+    const nB = parseInt(b.q) || 0;
+    if (nA !== nB) return nA - nB;
+    return FILENAMES.indexOf(a.fn) - FILENAMES.indexOf(b.fn);
+  });
+
+  entries.forEach(({ fn, q }) => repositionImage(fn, q));
+}
+
+// --- Read existing *[Q<N> 附图]* labels ---
+
+function loadExistingLabels() {
+  const labelRe = /\*\[Q(\d+)\s*附图\]\*/g;
+  let m;
+  while ((m = labelRe.exec(currentMarkdown)) !== null) {
+    const qNum = m[1];
+    const afterPos = m.index + m[0].length;
+    const rest = currentMarkdown.substring(afterPos);
+    const imgRe = /(?:src|href)=["'](?:[^"']*\/)?([^/"']+\.(?:jpg|jpeg|png|gif))["']/i;
+    const imgMatch = imgRe.exec(rest);
+    if (imgMatch) {
+      const imgFn = imgMatch[1];
+      const block = imgBlocks[imgFn];
+      if (block) {
+        const input = block.querySelector('input');
+        if (input && !input.value) {
+          input.value = qNum;
+          input.classList.add('has-value');
+          updateLabelByBlock(block);
+        }
+      }
+    }
+  }
+}
+
+// --- Input change → update label only (no reposition while typing) ---
+
+function onInputChange(e) {
+  const input = e.target;
+  const val = input.value.trim();
+  input.classList.toggle('has-value', !!val);
+  updateLabelByBlock(imgBlocks[input.dataset.filename]);
+}
+
+// --- Blur → reposition + save ---
+
+function onInputBlur(e) {
+  const input = e.target;
+  const fn = input.dataset.filename;
+  const val = input.value.trim();
+
+  // Move the image block under its assigned question
+  repositionImage(fn, val || null);
+
+  // Defer save
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSave, 500);
+}
+
+function updateLabelByBlock(block) {
+  if (!block) return;
+  const input = block.querySelector('input');
+  const label = block.querySelector('.q-label');
+  const val = input.value.trim();
+  label.textContent = val ? `Q${val.replace(/^Q/i, '')} 附图` : '';
+}
+
+// --- Build mapping & save ---
+
+function buildMapping() {
+  const mapping = {};
+  Object.keys(imgBlocks).forEach(fn => {
+    const input = imgBlocks[fn].querySelector('input');
+    const val = input.value.trim();
+    if (val) mapping[fn] = val;
+  });
+  return mapping;
+}
+
+let saveTimer = null;
+async function doSave() {
+  const mapping = buildMapping();
+  try {
+    const r = await fetch(`/tasks/${TASK_ID}/mapping`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(mapping),
+    });
+    const d = await r.json();
+    currentMarkdown = d.markdown;
+    const scrollY = window.scrollY;
+    renderPreview(d.markdown);
+    window.scrollTo(0, scrollY);
+    showStatus('✓ Saved');
+  } catch (e) {
+    showStatus('✗ ' + e.message);
+  }
+}
+
+function manualSave() {
+  clearTimeout(saveTimer);
+  doSave();
+}
+
+// --- Auto-fill by vertical position ---
+
+function parseCoords(filename) {
+  const m = filename.match(/img_in_image_box_(\d+)_(\d+)_(\d+)_(\d+)/);
+  return m ? { y1: +m[1], x1: +m[2], y2: +m[3], x2: +m[4] } : null;
+}
+
+function autoFill() {
+  let items = FILENAMES.map(fn => {
+    const c = parseCoords(fn);
+    return { fn, y: c ? c.y1 : 9999 };
+  });
+  items.sort((a, b) => a.y - b.y);
+  const start = parseInt(prompt('Starting question number?', '13')) || 13;
+  items.forEach((item, idx) => {
+    const block = imgBlocks[item.fn];
+    if (block) {
+      const input = block.querySelector('input');
+      input.value = start + idx;
+      input.classList.add('has-value');
+      updateLabelByBlock(block);
+    }
+  });
+  repositionAllImages();
+  autoSaveDelay();
+}
+
+// --- Reset ---
+
+function resetAll() {
+  Object.values(imgBlocks).forEach(block => {
+    const input = block.querySelector('input');
+    input.value = '';
+    input.classList.remove('has-value');
+    updateLabelByBlock(block);
+  });
+  repositionAllImages();
+  autoSaveDelay();
+}
+
+function autoSaveDelay() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(doSave, 500);
+}
+
+// --- Status ---
+
+function showStatus(msg) {
+  document.getElementById('status').textContent = msg;
+  setTimeout(() => { document.getElementById('status').textContent = ''; }, 2500);
+}
+
+init();
+</script>
+</body>
+</html>

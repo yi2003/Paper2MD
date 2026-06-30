@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task {{ task.id }}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; max-width: 700px; margin: 40px auto; padding: 20px; }
+  h1 { text-align: center; margin-bottom: 24px; font-size: 1.3em; }
+  .nav { text-align: center; margin-bottom: 20px; }
+  .nav a { color: #4fc3f7; }
+  .card { background: #16213e; border: 1px solid #333; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
+  .overall { font-size: 1.1em; margin-bottom: 16px; }
+  .page-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid #2a2a4e; }
+  .page-row:last-child { border-bottom: none; }
+  .page-label { min-width: 60px; font-weight: 600; }
+  .status { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 0.8em; font-weight: 600; }
+  .status-pending { background: #444; color: #aaa; }
+  .status-processing { background: #1a3a5c; color: #4fc3f7; }
+  .status-done { background: #1a3c1a; color: #4caf50; }
+  .status-failed { background: #3c1a1a; color: #f77; }
+  .status-awaiting_upload { background: #444; color: #888; }
+  .btn { padding: 8px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9em; font-weight: 600; }
+  .btn-edit { background: #4fc3f7; color: #1a1a2e; text-decoration: none; display: inline-block; }
+  .btn-download { background: #4caf50; color: #1a1a2e; text-decoration: none; display: inline-block; margin-left: 8px; }
+  .btn-retry { background: #f90; color: #1a1a2e; margin-left: 8px; font-size: 0.8em; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div class="nav"><a href="/tasks">← Task list</a></div>
+<h1>Task <code>{{ task.id }}</code></h1>
+
+<div class="card">
+  <div class="overall">
+    Status: <span class="status status-{{ task.status }}" id="overallStatus">{{ task.status }}</span>
+    <span style="margin-left:16px;color:#888;" id="progressText"></span>
+  </div>
+
+  <div id="pages">
+    {% for p in task.pages %}
+    <div class="page-row" id="pageRow{{ p.page_index }}">
+      <span class="page-label">Page {{ p.page_index + 1 }}</span>
+      <span class="status status-{{ p.status }}" id="pageStatus{{ p.page_index }}">{{ p.status }}</span>
+      <span style="font-size:0.75em;color:#666;" id="pageOcr{{ p.page_index }}">{{ p.ocr_task_id or '' }}</span>
+      <button class="btn btn-retry hidden" id="retryBtn{{ p.page_index }}" onclick="retryPage({{ p.page_index }})">Retry</button>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div style="margin-top:16px;text-align:center;" id="actions" class="hidden">
+    <a class="btn btn-edit" id="editLink" href="/tasks/{{ task.id }}/edit">Edit Mapping</a>
+    <a class="btn btn-download" id="downloadLink" href="/tasks/{{ task.id }}/download">Download .md</a>
+  </div>
+</div>
+
+<script>
+const taskId = '{{ task.id }}';
+const totalPages = {{ task.pages | length }};
+let pollTimer = null;
+
+function updateProgress() {
+  let done = 0, failed = 0;
+  for (let i = 0; i < totalPages; i++) {
+    const el = document.getElementById('pageStatus' + i);
+    if (!el) continue;
+    const st = el.textContent;
+    if (st === 'done') done++;
+    if (st === 'failed') failed++;
+  }
+  document.getElementById('progressText').textContent = `(${done + failed}/${totalPages} done)`;
+
+  if (done === totalPages) {
+    document.getElementById('overallStatus').textContent = 'done';
+    document.getElementById('overallStatus').className = 'status status-done';
+    document.getElementById('actions').classList.remove('hidden');
+    if (pollTimer) clearInterval(pollTimer);
+  }
+}
+
+async function poll() {
+  try {
+    const r = await fetch(`/tasks/${taskId}/status`);
+    const d = await r.json();
+
+    document.getElementById('overallStatus').textContent = d.status;
+    document.getElementById('overallStatus').className = 'status status-' + d.status;
+
+    for (const p of d.pages) {
+      const i = p.page_index;
+      const stEl = document.getElementById('pageStatus' + i);
+      const ocrEl = document.getElementById('pageOcr' + i);
+      const retryEl = document.getElementById('retryBtn' + i);
+      if (stEl) {
+        stEl.textContent = p.status;
+        stEl.className = 'status status-' + p.status;
+      }
+      if (ocrEl) ocrEl.textContent = p.ocr_task_id || '';
+      if (retryEl) {
+        retryEl.classList.toggle('hidden', p.status !== 'failed');
+      }
+    }
+
+    if (d.status === 'done') {
+      document.getElementById('actions').classList.remove('hidden');
+      if (pollTimer) clearInterval(pollTimer);
+    }
+  } catch (e) {
+    console.error(e);
+  }
+  updateProgress();
+}
+
+async function retryPage(index) {
+  try {
+    const r = await fetch(`/tasks/${taskId}/pages/${index}/retry`, { method: 'POST' });
+    if (r.ok) {
+      document.getElementById('retryBtn' + index).classList.add('hidden');
+      document.getElementById('pageStatus' + index).textContent = 'pending';
+      document.getElementById('pageStatus' + index).className = 'status status-pending';
+    }
+  } catch (e) {
+    alert('Retry failed: ' + e.message);
+  }
+}
+
+poll();
+pollTimer = setInterval(poll, 2000);
+</script>
+</body>
+</html>
