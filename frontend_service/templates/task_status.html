@@ -38,26 +38,34 @@
 
   /* Right panel — inline flex child, pushes main content */
   .edit-panel { width: 0; min-width: 0; overflow: hidden; background: #111; border-left: none; transition: width 0.3s, min-width 0.3s, padding 0.3s; display: flex; flex-direction: column; flex: 0 0 auto; }
-  .edit-panel.open { width: 60vw; min-width: 500px; overflow-y: auto; border-left: 1px solid #333; padding: 24px; }
-  .panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
-  .panel-header h2 { font-size: 1.1em; }
-  .panel-close { background: none; border: 1px solid #555; color: #aaa; font-size: 1.2em; cursor: pointer; width: 32px; height: 32px; border-radius: 4px; line-height: 30px; text-align: center; }
+  .edit-panel.open { width: 60vw; min-width: 500px; overflow: hidden; border-left: 1px solid #333; padding: 0; }
+  .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #0a0a1a; border-bottom: 1px solid #333; flex-shrink: 0; }
+  .panel-header h2 { font-size: 1em; }
+  .panel-close { background: none; border: 1px solid #555; color: #aaa; font-size: 1.2em; cursor: pointer; width: 28px; height: 28px; border-radius: 4px; line-height: 26px; text-align: center; }
   .panel-close:hover { color: #fff; border-color: #f77; }
 
-  .panel-section { margin-bottom: 16px; }
-  .panel-section h3 { font-size: 0.85em; color: #888; margin-bottom: 8px; }
-  .panel-raw-img { max-width: 100%; max-height: 320px; border: 1px solid #444; border-radius: 4px; display: block; cursor: pointer; }
+  /* Horizontal split inside the panel */
+  .panel-body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
 
-  .fig-item { display: flex; align-items: center; gap: 12px; padding: 10px; background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 6px; margin-bottom: 8px; }
-  .fig-item img { max-height: 100px; max-width: 140px; border: 1px solid #444; border-radius: 3px; }
-  .fig-item .fig-name { flex: 1; font-size: 0.75em; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  .fig-item input { width: 80px; padding: 6px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; text-align: center; font-size: 1em; }
+  .panel-left { width: 45%; border-right: 1px solid #333; display: flex; flex-direction: column; overflow: hidden; }
+  .panel-left-header { font-size: 0.75em; color: #888; padding: 6px 12px; background: #0d0d1a; border-bottom: 1px solid #2a2a4e; flex-shrink: 0; }
+  .panel-left-img { flex: 1; overflow: auto; padding: 10px; display: flex; align-items: flex-start; justify-content: center; }
+  .panel-left-img img { max-width: 100%; border: 1px solid #444; border-radius: 4px; }
+
+  .panel-right { width: 55%; display: flex; flex-direction: column; overflow: hidden; }
+  .panel-right-header { font-size: 0.75em; color: #888; padding: 6px 12px; background: #0d0d1a; border-bottom: 1px solid #2a2a4e; flex-shrink: 0; }
+  .panel-fig-list { flex: 1; overflow-y: auto; padding: 12px; }
+
+  .fig-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 6px; margin-bottom: 6px; }
+  .fig-item img { max-height: 80px; max-width: 120px; border: 1px solid #444; border-radius: 3px; }
+  .fig-item .fig-name { flex: 1; font-size: 0.72em; color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .fig-item input { width: 72px; padding: 5px; border-radius: 4px; border: 1px solid #555; background: #222; color: #fff; text-align: center; font-size: 0.95em; }
   .fig-item input:focus { outline: none; border-color: #4fc3f7; }
   .fig-item input.has-value { border-color: #4caf50; }
 
-  .panel-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-  .panel-toolbar button, .panel-toolbar a { padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.8em; font-weight: 600; text-decoration: none; }
-  .panel-status { font-size: 0.8em; color: #4caf50; margin-left: auto; align-self: center; }
+  .panel-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; background: #0a0a1a; border-top: 1px solid #333; flex-shrink: 0; }
+  .panel-toolbar button, .panel-toolbar a { padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.75em; font-weight: 600; text-decoration: none; }
+  .panel-status { font-size: 0.75em; color: #4caf50; margin-left: auto; align-self: center; }
 </style>
 </head>
 <body>
@@ -105,16 +113,20 @@
     <button class="panel-close" onclick="closeEditor()">&times;</button>
   </div>
 
-  <div class="panel-section">
-    <h3>Original Page</h3>
-    <a id="panelRawLink" href="#" target="_blank">
-      <img class="panel-raw-img" id="panelRawImg" src="" alt="Original page">
-    </a>
-  </div>
+  <div class="panel-body">
+    <div class="panel-left">
+      <div class="panel-left-header">📷 Original Page <span id="panelPageLabel">0</span></div>
+      <div class="panel-left-img">
+        <a id="panelRawLink" href="#" target="_blank">
+          <img id="panelRawImg" src="" alt="Original page">
+        </a>
+      </div>
+    </div>
 
-  <div class="panel-section">
-    <h3>Figures (<span id="figCount">0</span>)</h3>
-    <div id="figList"></div>
+    <div class="panel-right">
+      <div class="panel-right-header">Figures (<span id="figCount">0</span>)</div>
+      <div class="panel-fig-list" id="figList"></div>
+    </div>
   </div>
 
   <div class="panel-toolbar">
@@ -153,6 +165,7 @@ async function openEditor(pageIndex) {
   document.getElementById('panelRawImg').src = rawUrl;
   document.getElementById('panelRawLink').href = rawUrl;
   document.getElementById('panelPageNum').textContent = pageIndex + 1;
+  document.getElementById('panelPageLabel').textContent = pageIndex + 1;
   document.getElementById('figCount').textContent = editFilenames.length;
   document.getElementById('panelDownload').href = `/tasks/${TASK_ID}/pages/${pageIndex}/download`;
 
@@ -234,31 +247,22 @@ function renderFigureList() {
 // --- Existing labels ---
 
 async function loadExistingLabels(pageIndex) {
-  // Read current labels from the markdown's *[Q<N> 附图]* tags
+  // Read the saved label_mapping directly from the server
   try {
     const r = await fetch(`/tasks/${TASK_ID}/pages/${pageIndex}/markdown`);
     const d = await r.json();
-    const md = d.markdown || '';
-    const labelRe = /\*\[Q(\d+)\s*附图\]\*/g;
-    let m;
-    while ((m = labelRe.exec(md)) !== null) {
-      const qNum = m[1];
-      const afterPos = m.index + m[0].length;
-      const rest = md.substring(afterPos);
-      const imgRe = /src=["'](?:[^"']*\/)?([^/"']+\.(?:jpg|jpeg|png|gif|webp|bmp))["']/i;
-      const imgMatch = imgRe.exec(rest);
-      if (imgMatch) {
-        const fn = imgMatch[1].toLowerCase();
-        // Find matching block by case-insensitive filename
-        for (const key of Object.keys(editImgBlocks)) {
-          if (key.toLowerCase() === fn) {
-            const block = editImgBlocks[key];
-            if (block && block.input && !block.input.value) {
-              block.input.value = qNum;
-              block.input.classList.add('has-value');
-            }
-            break;
+    const mapping = d.label_mapping || {};
+    for (const [fn, qVal] of Object.entries(mapping)) {
+      const qNum = String(qVal).replace(/^Q/i, '');
+      // Find matching block by case-insensitive filename
+      for (const key of Object.keys(editImgBlocks)) {
+        if (key.toLowerCase() === fn.toLowerCase()) {
+          const block = editImgBlocks[key];
+          if (block && block.input && !block.input.value) {
+            block.input.value = qNum;
+            block.input.classList.add('has-value');
           }
+          break;
         }
       }
     }

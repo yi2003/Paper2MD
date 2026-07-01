@@ -9,6 +9,7 @@ User-facing web application for:
 """
 
 import base64
+import mimetypes
 import os
 import re
 import sys
@@ -28,6 +29,7 @@ from task_manager import (
     UPLOADS_DIR,
     _apply_labels_mapping,
     _extract_image_filenames,
+    normalize_markdown,
     poll_loop,
     remarge_task,
 )
@@ -44,7 +46,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 from jinja2 import Environment, FileSystemLoader
 
-jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)))
+jinja_env = Environment(loader=FileSystemLoader(str(TEMPLATES_DIR)), auto_reload=True)
 
 
 def _ts_to_date(ts: float) -> str:
@@ -75,6 +77,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Math Exam Parser — Frontend", version="1.0.0", lifespan=lifespan)
 
+
+# Disable browser caching during development
+@app.middleware("http")
+async def no_cache(request: Request, call_next):
+    from fastapi.responses import Response
+    response = await call_next(request)
+    if "text/html" in response.headers.get("content-type", ""):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Image serving (for mapping editor preview)
 # ---------------------------------------------------------------------------
@@ -96,6 +111,16 @@ async def serve_raw_page(task_id: str, page_index: int):
     """Serve the original uploaded page image."""
     filepath = UPLOADS_DIR / task_id / f"page_{page_index}.jpg"
     if not filepath.exists():
+        # Fallback: look in OCR service temp dir
+        ocr_temp = Path(os.getenv("OCR_WORK_DIR", ""))
+        if ocr_temp:
+            # Find OCR task dirs for this frontend task's page
+            page = await models.get_page(task_id, page_index)
+            if page and page.get("ocr_task_id"):
+                ocr_page = ocr_temp / page["ocr_task_id"] / "page.jpg"
+                if ocr_page.exists():
+                    from fastapi.responses import FileResponse
+                    return FileResponse(str(ocr_page))
         raise HTTPException(404, "Raw page image not found")
     from fastapi.responses import FileResponse
     return FileResponse(str(filepath))
@@ -148,8 +173,7 @@ async def upload_page(
     page_dir.mkdir(parents=True, exist_ok=True)
     page_path = page_dir / f"page_{index}.jpg"
     page_path.write_bytes(image_data)
-
-    # Forward to OCR service
+    print(f"  Saved original: {page_path} ({len(image_data):,} bytes)", file=sys.stderr)
     try:
         r = requests.post(
             f"{OCR_SERVICE_URL}/tasks",
@@ -298,11 +322,19 @@ async def get_markdown(task_id: str):
 
 @app.get("/tasks/{task_id}/pages/{page_index}/markdown")
 async def get_page_markdown(task_id: str, page_index: int):
-    """Return the markdown for a single page (for the per-page editor)."""
+    """Return the markdown + label mapping for a single page."""
     page = await models.get_page(task_id, page_index)
     if page is None or page["status"] != "done":
         raise HTTPException(404, "Page not found or not done")
-    return {"markdown": page.get("markdown") or ""}
+    import json as _json
+    mapping = {}
+    if page.get("label_mapping"):
+        try:
+            mapping = _json.loads(page["label_mapping"])
+        except _json.JSONDecodeError:
+            pass
+    md = normalize_markdown(page.get("markdown") or "")
+    return {"markdown": md, "label_mapping": mapping}
 
 
 @app.put("/tasks/{task_id}/pages/{page_index}/mapping")
@@ -332,25 +364,28 @@ async def save_page_mapping(task_id: str, page_index: int, request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Per-page download
+# ImgBB upload helpers
 # ---------------------------------------------------------------------------
 
-_IMGUR_UPLOAD_URL = "https://api.imgur.com/3/image"
-_ANON_CLIENT_ID = "546c25a59c58ad7"
+_IMGBB_UPLOAD_URL = "https://api.imgbb.com/1/upload"
 
 
-def _upload_images_for_markdown(md_content: str, images_dir: Path) -> str:
-    """Upload images referenced in markdown to Imgur, replace local refs.
+def _upload_images_for_markdown(task_id: str, md_content: str, images_dir: Path) -> str:
+    """Upload images referenced in markdown to ImgBB, replace local refs.
 
-    Reads images from `images_dir`, uploads each to Imgur, then replaces
-    images/<filename> refs with Imgur URLs.
+    Reads images from `images_dir`, uploads each to ImgBB, replaces
+    images/<filename> refs with ImgBB URLs, and saves mappings to DB.
     """
+    md_content = normalize_markdown(md_content)
+
     if not images_dir.is_dir():
         return md_content
 
-    client_id = os.getenv("IMGUR_CLIENT_ID", "")
-    if client_id in ("", "your_imgur_client_id_here", None):
-        client_id = _ANON_CLIENT_ID
+    api_key = os.getenv("IMGBB_API_KEY", "")
+    if not api_key:
+        print("  [download] IMGBB_API_KEY not set — using base64 inline",
+              file=sys.stderr)
+        return _inline_all_images(task_id, md_content, images_dir)
 
     refs: set[str] = set()
     for m in re.finditer(r"""src=["']images/([^"']+)["']""", md_content):
@@ -361,40 +396,101 @@ def _upload_images_for_markdown(md_content: str, images_dir: Path) -> str:
     if not refs:
         return md_content
 
-    print(f"  [download] uploading {len(refs)} images to Imgur...",
+    print(f"  [download] uploading {len(refs)} images to ImgBB...",
           file=sys.stderr)
 
+    import asyncio
+
     for filename in refs:
+        # 1. Check if we already have a cached URL for this image
+        cached_url = models.get_image_url_sync(task_id, filename)
+        if cached_url:
+            md_content = md_content.replace(f"images/{filename}", cached_url)
+            print(f"    ↻ {filename} → {cached_url} (cached)", file=sys.stderr)
+            continue
+
         filepath = images_dir / filename
         if not filepath.exists():
             print(f"    ✗ {filename} — not found", file=sys.stderr)
             continue
 
         b64 = base64.b64encode(filepath.read_bytes()).decode("utf-8")
+        mime, _ = mimetypes.guess_type(filename)
+        if not mime or not mime.startswith("image/"):
+            mime = "image/jpeg"
+
+        # 2. Try ImgBB upload
+        url = None
         try:
             r = requests.post(
-                _IMGUR_UPLOAD_URL,
-                headers={"Authorization": f"Client-ID {client_id}"},
-                data={"image": b64, "type": "base64"},
+                _IMGBB_UPLOAD_URL,
+                data={"key": api_key, "image": b64},
                 timeout=60,
             )
-            data = r.json()
-            if data.get("success"):
-                url = data["data"]["link"]
+            resp_data = r.json()
+            if resp_data.get("success"):
+                url = resp_data["data"]["url"]
                 md_content = md_content.replace(f"images/{filename}", url)
                 print(f"    ✓ {filename} → {url}", file=sys.stderr)
+
+                # Save mapping to DB
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.ensure_future(
+                            models.save_image_mapping(task_id, filename, url, b64)
+                        )
+                    else:
+                        asyncio.run(
+                            models.save_image_mapping(task_id, filename, url, b64)
+                        )
+                except Exception as e:
+                    print(f"    ⚠ DB save failed for {filename}: {e}", file=sys.stderr)
             else:
-                err = data.get("data", {}).get("error", r.text)
-                print(f"    ✗ {filename} — {err}", file=sys.stderr)
+                err = resp_data.get("error", {}).get("message", r.text)
+                print(f"    ✗ ImgBB: {filename} — {err}", file=sys.stderr)
         except requests.RequestException as e:
-            print(f"    ✗ {filename} — {e}", file=sys.stderr)
+            print(f"    ✗ ImgBB: {filename} — {e}", file=sys.stderr)
+
+        # 3. Fallback: inline as base64 if ImgBB failed
+        if url is None:
+            data_uri = f"data:{mime};base64,{b64}"
+            md_content = md_content.replace(f"images/{filename}", data_uri)
+            print(f"    ⚡ {filename} → base64 inline (ImgBB failed)", file=sys.stderr)
 
     return md_content
 
 
+def _inline_all_images(task_id: str, md_content: str, images_dir: Path) -> str:
+    """Fallback: inline all image refs as base64 data URIs (no external upload)."""
+    refs: set[str] = set()
+    for m in re.finditer(r"""src=["']images/([^"']+)["']""", md_content):
+        refs.add(m.group(1))
+    for m in re.finditer(r"""!\[.*?\]\(images/([^)]+)\)""", md_content):
+        refs.add(m.group(1))
+
+    for filename in refs:
+        filepath = images_dir / filename
+        if not filepath.exists():
+            continue
+        b64 = base64.b64encode(filepath.read_bytes()).decode("utf-8")
+        mime, _ = mimetypes.guess_type(filename)
+        if not mime or not mime.startswith("image/"):
+            mime = "image/jpeg"
+        data_uri = f"data:{mime};base64,{b64}"
+        md_content = md_content.replace(f"images/{filename}", data_uri)
+
+    return md_content
+
+
+# ---------------------------------------------------------------------------
+# Per-page download
+# ---------------------------------------------------------------------------
+
+
 @app.get("/tasks/{task_id}/pages/{page_index}/download")
 async def download_page(task_id: str, page_index: int):
-    """Download a single page's Markdown with images uploaded to Imgur."""
+    """Download a single page's Markdown with Imgur-hosted images."""
     page = await models.get_page(task_id, page_index)
     if page is None or page["status"] != "done":
         raise HTTPException(404, "Page not found or not done")
@@ -413,7 +509,7 @@ async def download_page(task_id: str, page_index: int):
             pass
 
     images_dir = UPLOADS_DIR / task_id / "images"
-    md = _upload_images_for_markdown(md, images_dir)
+    md = _upload_images_for_markdown(task_id, md, images_dir)
 
     return PlainTextResponse(
         md,
@@ -429,7 +525,7 @@ async def download_page(task_id: str, page_index: int):
 
 @app.get("/tasks/{task_id}/download")
 async def download(task_id: str):
-    """Download self-contained Markdown with images uploaded to Imgur."""
+    """Download self-contained Markdown with Imgur-hosted images."""
     task = await models.get_task(task_id)
     if task is None:
         raise HTTPException(404, "Task not found")
@@ -439,7 +535,7 @@ async def download(task_id: str):
     md = merged if merged else (task.get("merged_markdown") or "")
 
     images_dir = UPLOADS_DIR / task_id / "images"
-    md = _upload_images_for_markdown(md, images_dir)
+    md = _upload_images_for_markdown(task_id, md, images_dir)
 
     return PlainTextResponse(
         md,

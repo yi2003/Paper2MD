@@ -29,6 +29,15 @@ CREATE TABLE IF NOT EXISTS pages (
     markdown TEXT,
     label_mapping TEXT
 );
+
+CREATE TABLE IF NOT EXISTS image_mappings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    filename TEXT NOT NULL,
+    imgur_url TEXT,
+    base64 TEXT,
+    created_at REAL NOT NULL
+);
 """
 
 MIGRATIONS = [
@@ -228,3 +237,42 @@ async def get_all_page_markdowns(task_id: str) -> list[dict]:
         (task_id,),
     )
     return [dict(r) for r in rows]
+
+
+# --- Image mappings (Imgur URL + base64) ---
+
+async def save_image_mapping(task_id: str, filename: str, imgur_url: str, base64_data: str):
+    """Save an Imgur URL ↔ base64 mapping for an uploaded image."""
+    db = await get_db()
+    await db.execute(
+        "INSERT INTO image_mappings (task_id, filename, imgur_url, base64, created_at) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (task_id, filename, imgur_url, base64_data, time.time()),
+    )
+    await db.commit()
+
+
+async def get_image_mappings(task_id: str) -> list[dict]:
+    """Get all image mappings for a task."""
+    db = await get_db()
+    rows = await db.execute_fetchall(
+        "SELECT id, task_id, filename, imgur_url, created_at FROM image_mappings "
+        "WHERE task_id = ? ORDER BY filename",
+        (task_id,),
+    )
+    return [dict(r) for r in rows]
+
+
+def get_image_url_sync(task_id: str, filename: str) -> str | None:
+    """Sync lookup: return cached Imgur URL for a task+filename, or None."""
+    db_path = Path(__file__).parent / "data.db"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        row = conn.execute(
+            "SELECT imgur_url FROM image_mappings "
+            "WHERE task_id = ? AND filename = ? ORDER BY id DESC LIMIT 1",
+            (task_id, filename),
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()

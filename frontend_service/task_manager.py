@@ -7,6 +7,31 @@ import mimetypes
 import os
 import re
 import sys
+
+# ---------------------------------------------------------------------------
+# Markdown normalization
+# ---------------------------------------------------------------------------
+
+_IMG_SELF_CLOSE_RE = re.compile(r'<img\s([^>]*?)\s*/>')
+# Single \ between whitespace — fix OCR'd LaTeX line breaks (e.g. 5 \ 2x → 5 \\ 2x)
+_LATEX_LINEBREAK_RE = re.compile(r'(?<=\s)\\(?=\s)')
+
+
+def normalize_img_tags(md: str) -> str:
+    """Convert self-closing <img .../> to <img ...></img>."""
+    return _IMG_SELF_CLOSE_RE.sub(r'<img \1></img>', md)
+
+
+def normalize_latex(md: str) -> str:
+    """Fix LaTeX: replace standalone \\ followed by whitespace with \\\\ (line break)."""
+    return _LATEX_LINEBREAK_RE.sub(r'\\\\', md)
+
+
+def normalize_markdown(md: str) -> str:
+    """Apply all markdown normalizations."""
+    md = normalize_img_tags(md)
+    md = normalize_latex(md)
+    return md
 from pathlib import Path
 
 import requests
@@ -81,13 +106,14 @@ def _apply_labels_mapping(md_content: str, mapping: dict[str, str]) -> str:
 
     def _extract_and_remove(content: str) -> str:
         # <img src="images/...">  —  PaddleOCR-VL primary format
+        # Supports both <img .../> and <img ...></img>
         for m in re.finditer(
-            r'<img\s[^>]*?src=["\']([^"\']+)["\'][^>]*?>',
+            r'<img\s[^>]*?src=["\']([^"\']+)["\'][^>]*?(?:/>|>)\s*(?:</img>)?',
             content, re.IGNORECASE,
         ):
             fn = Path(m.group(1)).name
             img_refs.append((fn, m.group(0)))
-        content = re.sub(r'<img\s[^>]*?>', '', content, flags=re.IGNORECASE)
+        content = re.sub(r'<img\s[^>]*?(?:/>|>)\s*(?:</img>)?', '', content, flags=re.IGNORECASE)
 
         # Clean up <div> wrappers left empty after image removal
         content = re.sub(r'<div[^>]*?>\s*</div>', '', content, flags=re.IGNORECASE)
@@ -221,11 +247,14 @@ async def poll_loop():
                             img_path = images_dir / img["filename"]
                             img_path.write_bytes(base64.b64decode(img["base64"]))
 
+                        # Normalize markdown: img tags + LaTeX line breaks
+                        md = normalize_markdown(result["markdown"])
+
                         await models.update_page_result(
                             task_id=task_id,
                             page_index=page["page_index"],
                             status="done",
-                            markdown=result["markdown"],
+                            markdown=md,
                         )
                         print(f"  [{task_id}] page {page['page_index']} done",
                               file=sys.stderr)

@@ -23,21 +23,65 @@ MathJax = {
 
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; }
-  .nav { position: fixed; top: 0; left: 0; right: 0; background: #111; padding: 8px 20px; z-index: 10; display: flex; align-items: center; gap: 16px; font-size: 0.85em; }
-  .nav a { color: #4fc3f7; }
+  body { font-family: -apple-system, system-ui, sans-serif; background: #1a1a2e; color: #eee; height: 100vh; overflow: hidden; }
+
+  /* Top nav */
+  .nav {
+    height: 44px; background: #111; padding: 0 20px;
+    display: flex; align-items: center; gap: 12px; font-size: 0.85em;
+    border-bottom: 1px solid #333; flex-shrink: 0;
+  }
+  .nav a { color: #4fc3f7; text-decoration: none; }
   .nav .task-id { color: #888; }
-  .main { max-width: 960px; margin: 0 auto; padding: 54px 24px 80px; }
+  .page-tabs { display: flex; gap: 4px; margin-left: 8px; }
+  .page-tab { padding: 3px 12px; border: 1px solid #444; border-radius: 4px; background: transparent; color: #aaa; cursor: pointer; font-size: 0.8em; text-decoration: none; }
+  .page-tab.active { background: #4fc3f7; color: #1a1a2e; border-color: #4fc3f7; }
+  .page-tab:hover:not(.active) { border-color: #4fc3f7; color: #4fc3f7; }
+
+  /* Main split layout */
+  .app-body {
+    display: flex; height: calc(100vh - 44px - 50px); /* nav + toolbar */
+  }
+
+  /* Left panel — original page image */
+  .left-panel {
+    width: 45%; border-right: 1px solid #333; background: #0d0d1a;
+    display: flex; flex-direction: column;
+  }
+  .left-panel .panel-header {
+    padding: 8px 14px; background: #16213e; border-bottom: 1px solid #333;
+    font-size: 0.8em; color: #888; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .left-panel .panel-header a { color: #4fc3f7; font-size: 0.9em; }
+  .left-panel .img-wrap {
+    flex: 1; overflow: auto; padding: 12px;
+    display: flex; align-items: flex-start; justify-content: center;
+  }
+  .left-panel .img-wrap img {
+    max-width: 100%; border: 1px solid #444; border-radius: 4px;
+    /* no max-height — scroll to see full */
+  }
+
+  /* Right panel — markdown editor */
+  .right-panel {
+    width: 55%; display: flex; flex-direction: column; overflow: hidden;
+  }
+  .right-panel .panel-header {
+    padding: 8px 14px; background: #16213e; border-bottom: 1px solid #333;
+    font-size: 0.8em; color: #888; flex-shrink: 0;
+  }
+  .markdown-wrap {
+    flex: 1; overflow-y: auto; padding: 20px 24px 10px;
+  }
   .markdown-body { font-size: 0.95em; line-height: 1.7; color: #ccc; }
   .markdown-body img { max-width: 100%; border: 1px solid #444; border-radius: 4px; }
   .markdown-body table { margin: 12px auto; border-collapse: collapse; }
   .markdown-body td, .markdown-body th { border: 1px solid #555; padding: 4px 10px; text-align: center; }
   .markdown-body h2 { border-bottom: 1px solid #444; padding-bottom: 4px; margin: 1.5em 0 0.6em; }
 
-  /* Question marker — hidden anchor for positioning images */
+  /* Image blocks in right panel */
   .q-marker { display: none; }
-
-  /* Image wrapper injected by JS */
   .img-block { margin: 16px 0; padding: 10px; background: #16213e; border: 1px solid #444; border-radius: 8px; text-align: center; }
   .img-block .q-label { font-size: 0.85em; color: #4fc3f7; font-weight: 600; margin-bottom: 6px; }
   .img-block .q-label:empty { display: none; }
@@ -48,20 +92,20 @@ MathJax = {
   .img-block input:focus { outline: none; border-color: #4fc3f7; }
   .img-block input.has-value { border-color: #4caf50; }
 
-  /* Toolbar */
-  .toolbar { position: fixed; bottom: 0; left: 0; right: 0; background: #111; border-top: 1px solid #333; padding: 10px 24px; display: flex; align-items: center; gap: 10px; z-index: 10; }
-  .toolbar button, .toolbar a.btn { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85em; font-weight: 600; text-decoration: none; }
+  /* Bottom toolbar */
+  .toolbar {
+    height: 50px; background: #111; border-top: 1px solid #333;
+    padding: 0 24px; display: flex; align-items: center; gap: 10px;
+    flex-shrink: 0;
+  }
+  .toolbar button, .toolbar a.btn {
+    padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 0.85em; font-weight: 600; text-decoration: none;
+  }
   .btn-save { background: #4caf50; color: #fff; }
   .btn-auto { background: #444; color: #ddd; }
   .btn-reset { background: transparent; color: #f77; border: 1px solid #f77 !important; }
   .btn-download { background: #4fc3f7; color: #1a1a2e; }
-
-  /* Page tabs */
-  .page-tabs { display: flex; gap: 4px; margin-left: 12px; }
-  .page-tab { padding: 4px 14px; border: 1px solid #444; border-radius: 4px; background: transparent; color: #aaa; cursor: pointer; font-size: 0.8em; text-decoration: none; }
-  .page-tab.active { background: #4fc3f7; color: #1a1a2e; border-color: #4fc3f7; }
-  .page-tab:hover:not(.active) { border-color: #4fc3f7; color: #4fc3f7; }
-
   .status-msg { font-size: 0.8em; color: #4caf50; margin-left: auto; min-width: 60px; text-align: right; }
 </style>
 </head>
@@ -74,16 +118,28 @@ MathJax = {
   <a href="/tasks/{{ task.id }}/download" class="btn-download" style="margin-left:auto;">Download .md</a>
 </div>
 
-<div class="main">
-  <details style="margin-bottom:16px;background:#16213e;border:1px solid #333;border-radius:8px;padding:12px;">
-    <summary style="cursor:pointer;color:#4fc3f7;font-size:0.9em;user-select:none;">📷 Original Page {{ page_index + 1 }} (click to expand)</summary>
-    <a href="/tasks/{{ task.id }}/pages/{{ page_index }}/raw" target="_blank">
+<div class="app-body">
+  <!-- Left panel: original page image -->
+  <div class="left-panel">
+    <div class="panel-header">
+      <span>📷 Original Page {{ page_index + 1 }} / {{ pages_count }}</span>
+      <a href="/tasks/{{ task.id }}/pages/{{ page_index }}/raw" target="_blank" title="Open full size">↗</a>
+    </div>
+    <div class="img-wrap">
       <img src="/tasks/{{ task.id }}/pages/{{ page_index }}/raw"
-           style="max-width:100%;max-height:600px;border:1px solid #444;border-radius:4px;margin-top:8px;display:block;"
            alt="Original page {{ page_index + 1 }}">
-    </a>
-  </details>
-  <div class="markdown-body" id="preview"></div>
+    </div>
+  </div>
+
+  <!-- Right panel: markdown + image blocks -->
+  <div class="right-panel">
+    <div class="panel-header">
+      <span>📝 OCR Result — Page {{ page_index + 1 }}</span>
+    </div>
+    <div class="markdown-wrap">
+      <div class="markdown-body" id="preview"></div>
+    </div>
+  </div>
 </div>
 
 <div class="toolbar">
@@ -134,8 +190,7 @@ function renderPreview(md) {
   html = html.replace(/src='images\//g, `src='/tasks/${TASK_ID}/images/`);
   html = html.replace(/]\(images\//g, `](/tasks/${TASK_ID}/images/`);
 
-  // Inject hidden anchor markers at each question number line.
-  // Matches "13.", "14、", "15,", "16．" at start of line.
+  // Inject hidden anchor markers at each question number line
   html = html.replace(/(^|\n)(\d{1,2})([.、,．])(\s?)/g,
     '$1<span class="q-marker" data-q="$2"></span>$2$3$4');
 
@@ -161,7 +216,7 @@ function renderPreview(md) {
     label.className = 'q-label';
     block.appendChild(label);
 
-    // Move image into block (detach from current parent)
+    // Move image into block
     block.appendChild(img);
 
     const meta = document.createElement('div');
@@ -177,7 +232,6 @@ function renderPreview(md) {
     meta.appendChild(input);
     block.appendChild(meta);
 
-    // Store reference (detached — will be positioned by repositionImage)
     imgBlocks[fn] = block;
   });
 
@@ -200,29 +254,23 @@ function repositionImage(fn, qNum) {
   const preview = document.getElementById('preview');
 
   if (!qNum) {
-    // No question assigned — append at the very end
     preview.appendChild(block);
     return;
   }
 
-  // Collect all question markers in document order
   const markers = [...preview.querySelectorAll('.q-marker')];
-  // Find the marker for *this* question
   const idx = markers.findIndex(m => m.dataset.q === qNum);
 
   if (idx === -1) {
-    // Question number not in the text — append at end
     preview.appendChild(block);
     return;
   }
 
-  // Find the top-level node containing this marker
   function topLevel(el) {
     while (el.parentNode && el.parentNode !== preview) el = el.parentNode;
     return el;
   }
 
-  // Insert before the *next* question's top-level node, or at end
   if (idx + 1 < markers.length) {
     const nextAnchor = topLevel(markers[idx + 1]);
     preview.insertBefore(block, nextAnchor);
@@ -232,13 +280,11 @@ function repositionImage(fn, qNum) {
 }
 
 function repositionAllImages() {
-  // Group images by question, then reposition each
   const preview = document.getElementById('preview');
   Object.values(imgBlocks).forEach(b => {
     if (!b.parentNode) preview.appendChild(b);
   });
 
-  // Sort by question number, then filename (so same-Q images stay together)
   const entries = [];
   Object.keys(imgBlocks).forEach(fn => {
     const input = imgBlocks[fn].querySelector('input');
@@ -246,7 +292,6 @@ function repositionAllImages() {
     entries.push({ fn, q });
   });
 
-  // Sort: unassigned last, then by Q number, then by filename pos
   entries.sort((a, b) => {
     if (!a.q && !b.q) return 0;
     if (!a.q) return 1;
@@ -286,7 +331,7 @@ function loadExistingLabels() {
   }
 }
 
-// --- Input change → update label only (no reposition while typing) ---
+// --- Input change → update label only ---
 
 function onInputChange(e) {
   const input = e.target;
@@ -301,11 +346,7 @@ function onInputBlur(e) {
   const input = e.target;
   const fn = input.dataset.filename;
   const val = input.value.trim();
-
-  // Move the image block under its assigned question
   repositionImage(fn, val || null);
-
-  // Defer save
   clearTimeout(saveTimer);
   saveTimer = setTimeout(doSave, 500);
 }
@@ -341,9 +382,9 @@ async function doSave() {
     });
     const d = await r.json();
     currentMarkdown = d.markdown;
-    const scrollY = window.scrollY;
+    const scrollY = document.querySelector('.markdown-wrap').scrollTop;
     renderPreview(d.markdown);
-    window.scrollTo(0, scrollY);
+    document.querySelector('.markdown-wrap').scrollTo(0, scrollY);
     showStatus('✓ Saved');
   } catch (e) {
     showStatus('✗ ' + e.message);

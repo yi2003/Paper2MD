@@ -167,6 +167,12 @@ def run_ocr(image_path: Path, work_dir: Path, max_dim: int = 1536):
     md_content = md_content.replace("src='imgs/", "src='images/")
     md_content = md_content.replace("](imgs/", "](images/")
 
+    # ---- Step 3c: Normalize img tags + LaTeX line breaks ----
+    import re as _re
+    md_content = _re.sub(r'<img\s([^>]*?)\s*/>', r'<img \1></img>', md_content)
+    # Replace standalone \ between whitespace with \\ (LaTeX line breaks)
+    md_content = _re.sub(r'(?<=\s)\\(?=\s)', r'\\\\', md_content)
+
     # ---- Step 4: Base64-encode images for transport ----
     images_payload: list[dict] = []
     for img_file in work_images:
