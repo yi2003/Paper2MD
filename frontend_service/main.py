@@ -131,67 +131,94 @@ async def serve_raw_page(task_id: str, page_index: int):
 # ---------------------------------------------------------------------------
 
 @app.post("/tasks")
-async def create_task(pages: int = Form(...)):
+async def create_task():
     """Create a new frontend task. Returns the task_id."""
-    if pages < 1 or pages > 50:
-        raise HTTPException(400, "pages must be between 1 and 50")
-    task_id = await models.create_task(pages)
-    return JSONResponse({"task_id": task_id, "pages": pages}, status_code=201)
+    task_id = await models.create_task()
+    return JSONResponse({"task_id": task_id}, status_code=201)
 
 
 @app.post("/tasks/{task_id}/pages")
-async def upload_page(
+async def upload_pages(
     task_id: str,
-    index: int,
-    file: UploadFile = File(...),
+    files: list[UploadFile] = File(...),
 ):
-    """Upload a single page image. Forwards to OCR service immediately."""
+    """Upload one or more page images. Each file becomes a page, auto-indexed.
+    Forwards to OCR service immediately."""
     # Validate task exists
     task = await models.get_task(task_id)
     if task is None:
         raise HTTPException(404, "Task not found")
 
-    if index < 0 or index >= len(task["pages"]):
-        raise HTTPException(400, f"index must be 0–{len(task['pages']) - 1}")
+    if len(files) > 50:
+        raise HTTPException(400, "Maximum 50 files per upload")
 
-    page = task["pages"][index]
-    if page["status"] not in ("awaiting_upload", "failed"):
-        raise HTTPException(409, f"Page {index} already uploaded (status: {page['status']})")
+    results = []
+    # Determine starting index: count existing pages
+    next_index = len(task["pages"])
 
-    # Validate and possibly convert image
-    suffix = Path(file.filename or "page.jpg").suffix.lower()
-    allowed = {".jpg", ".jpeg", ".png"}
-    if suffix not in allowed:
-        raise HTTPException(415, f"Unsupported type: {suffix}")
+    for i, file in enumerate(files):
+        page_index = next_index + i
 
-    image_data = await file.read()
-    if suffix == ".png":
-        image_data = _convert_png_to_jpeg(image_data, file.filename or "page.png")
+        # Validate and possibly convert image
+        suffix = Path(file.filename or "page.jpg").suffix.lower()
+        allowed = {".jpg", ".jpeg", ".png"}
+        if suffix not in allowed:
+            results.append({
+                "page_index": page_index,
+                "filename": file.filename,
+                "status": "error",
+                "error": f"Unsupported type: {suffix}",
+            })
+            continue
 
-    # Save original for retry
-    page_dir = UPLOADS_DIR / task_id
-    page_dir.mkdir(parents=True, exist_ok=True)
-    page_path = page_dir / f"page_{index}.jpg"
-    page_path.write_bytes(image_data)
-    print(f"  Saved original: {page_path} ({len(image_data):,} bytes)", file=sys.stderr)
-    try:
-        r = requests.post(
-            f"{OCR_SERVICE_URL}/tasks",
-            files={"file": (f"page_{index}.jpg", image_data, "image/jpeg")},
-            timeout=30,
-        )
-        r.raise_for_status()
-        ocr_data = r.json()
-    except requests.RequestException as e:
-        raise HTTPException(502, f"OCR service unavailable: {e}")
+        image_data = await file.read()
+        if suffix == ".png":
+            image_data = _convert_png_to_jpeg(image_data, file.filename or "page.png")
 
-    ocr_task_id = ocr_data["task_id"]
-    await models.register_page_ocr(task_id, index, ocr_task_id)
+        # Add page slot to DB
+        await models.add_page(task_id, page_index)
+
+        # Save original for retry
+        page_dir = UPLOADS_DIR / task_id
+        page_dir.mkdir(parents=True, exist_ok=True)
+        page_path = page_dir / f"page_{page_index}.jpg"
+        page_path.write_bytes(image_data)
+        print(f"  Saved original: {page_path} ({len(image_data):,} bytes)", file=sys.stderr)
+
+        try:
+            r = requests.post(
+                f"{OCR_SERVICE_URL}/tasks",
+                files={"file": (f"page_{page_index}.jpg", image_data, "image/jpeg")},
+                timeout=30,
+            )
+            r.raise_for_status()
+            ocr_data = r.json()
+        except requests.RequestException as e:
+            results.append({
+                "page_index": page_index,
+                "filename": file.filename,
+                "status": "error",
+                "error": f"OCR service unavailable: {e}",
+            })
+            # Mark page as failed so user can retry
+            await models.update_page_result(page_index, task_id, "failed")
+            continue
+
+        ocr_task_id = ocr_data["task_id"]
+        await models.register_page_ocr(task_id, page_index, ocr_task_id)
+
+        results.append({
+            "page_index": page_index,
+            "ocr_task_id": ocr_task_id,
+            "filename": file.filename,
+            "status": "pending",
+        })
 
     return JSONResponse({
-        "page_index": index,
-        "ocr_task_id": ocr_task_id,
-        "status": "pending",
+        "task_id": task_id,
+        "pages_uploaded": len([r for r in results if r["status"] == "pending"]),
+        "pages_failed": len([r for r in results if r["status"] == "error"]),
+        "results": results,
     })
 
 

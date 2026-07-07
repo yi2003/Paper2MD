@@ -83,8 +83,8 @@ async def close_db():
 # Task CRUD
 # ---------------------------------------------------------------------------
 
-async def create_task(pages_count: int) -> str:
-    """Create a frontend task with N page slots. Returns task_id."""
+async def create_task() -> str:
+    """Create a frontend task (pages are added dynamically on upload). Returns task_id."""
     db = await get_db()
     task_id = f"ft-{uuid.uuid4().hex[:12]}"
     now = time.time()
@@ -93,13 +93,18 @@ async def create_task(pages_count: int) -> str:
         "INSERT INTO tasks (id, status, created_at) VALUES (?, 'pending', ?)",
         (task_id, now),
     )
-    for i in range(pages_count):
-        await db.execute(
-            "INSERT INTO pages (task_id, page_index, status) VALUES (?, ?, 'awaiting_upload')",
-            (task_id, i),
-        )
     await db.commit()
     return task_id
+
+
+async def add_page(task_id: str, page_index: int) -> None:
+    """Add a page slot to an existing task."""
+    db = await get_db()
+    await db.execute(
+        "INSERT INTO pages (task_id, page_index, status) VALUES (?, ?, 'awaiting_upload')",
+        (task_id, page_index),
+    )
+    await db.commit()
 
 
 async def register_page_ocr(task_id: str, page_index: int, ocr_task_id: str):
